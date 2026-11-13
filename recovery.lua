@@ -295,7 +295,6 @@ function M.new(api, options)
           apps[key] = record
           launches[#launches + 1] = record
         else
-          api.log("warn", "[DEBUG-ci-startup] " .. api.json.encode(observation.processes))
           api.log("warn", "Not restoring " .. record.app .. ": terminal " .. key .. " is busy")
         end
       end
@@ -304,6 +303,14 @@ function M.new(api, options)
       version = 1, host_id = status.host_id, instance_id = status.instance_id,
       apps = apps, pending = pending,
     }
+    -- Local PID checks can outlive the server that supplied the process list.
+    -- If Rex died in that window, missing PIDs are not intentional app exits
+    -- and must not replace the last durable checkpoint with an incomplete scan.
+    local current_status, status_err = api.call("server.status")
+    if not current_status then return nil, status_err end
+    if current_status.host_id ~= status.host_id or current_status.instance_id ~= status.instance_id then
+      return nil, "server changed during the scan; checkpoint left untouched"
+    end
     local saved, save_err = M.save(options.state_path, next_state, api.json)
     if not saved then return nil, save_err end
     state = next_state

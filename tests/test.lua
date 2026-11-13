@@ -417,6 +417,56 @@ test("API failures and host mismatches leave the last durable checkpoint untouch
   end
 end)
 
+test("losing Rex during the final process check cannot erase the last checkpoint", function()
+  local f = fixture()
+  f.blocks = { f.blocks[1] }
+  local m = monitor(f)
+  assert(m:tick())
+  local saved = read(f.options.state_path)
+  local original_call, original_exec = f.api.call, f.api.exec
+  local disconnected = false
+  f.api.call = function(method, args)
+    if disconnected then return nil, "server went away" end
+    return original_call(method, args)
+  end
+  f.api.exec = function(argv)
+    equal(argv, { "ps", "-p", "7001", "-o", "lstart=" })
+    disconnected = true
+    return { ok = false, stdout = "" }
+  end
+  local ok, err = m:tick()
+  assert(not ok and err, "a disconnected scan was saved as successful")
+  equal(read(f.options.state_path), saved)
+  equal(f.writes, {})
+  f.api.call, f.api.exec = original_call, original_exec
+  restarted(f)
+  assert(monitor(f):tick())
+  equal(#f.writes, 1)
+end)
+
+test("a server identity change during a scan leaves the previous checkpoint untouched", function()
+  for _, changed in ipairs({ "host", "instance" }) do
+    local f = fixture()
+    f.blocks = { f.blocks[1] }
+    local m = monitor(f)
+    assert(m:tick())
+    local saved = read(f.options.state_path)
+    local original_exec = f.api.exec
+    f.api.exec = function(argv)
+      local result = original_exec(argv)
+      f.status = {
+        host_id = changed == "host" and "host-b" or "host-a",
+        instance_id = changed == "instance" and "run-b" or "run-a",
+      }
+      return result
+    end
+    local ok, err = m:tick()
+    assert(not ok and err, "a scan spanning different servers was accepted")
+    equal(read(f.options.state_path), saved)
+    equal(f.writes, {})
+  end
+end)
+
 test("failed saves prevent command execution and can be retried after storage is repaired", function()
   local f = fixture()
   local m = monitor(f)

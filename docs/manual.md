@@ -238,7 +238,10 @@ session state.
   before typing. This is not an atomic idle guarantee: shell builtins,
   unsubmitted input, and last-moment process changes remain possible.
 - Checkpoints are validated and atomically renamed into place. Failed saves
-  prevent relaunches; corrupt checkpoints are left untouched. Atomic rename
+  prevent relaunches; corrupt checkpoints are left untouched. A scan only
+  replaces the checkpoint if the same server still responds after local
+  process checks, so a disconnect cannot turn a partial scan into completed
+  commands. Atomic rename
   is not an `fsync` guarantee against power loss.
 - A kernel lock prevents watchers from sharing a checkpoint. A leftover empty
   lock file does not imply a live lock.
