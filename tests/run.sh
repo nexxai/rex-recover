@@ -8,6 +8,7 @@ sh "$root/tests/config.sh"
 sh "$root/tests/launcher.sh"
 sh "$root/tests/commands.sh"
 sh "$root/tests/bash.sh"
+sh "$root/tests/setup.sh"
 temporary=$(mktemp -d "${REX_TEST_TMPDIR:-${TMPDIR:-/tmp}}/rex-recovery-tests.XXXXXX")
 temporary=$(CDPATH= cd -- "$temporary" && pwd -P)
 endpoint="unix://$temporary/rex.sock"
