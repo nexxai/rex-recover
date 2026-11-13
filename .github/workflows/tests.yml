@@ -68,10 +68,4 @@ jobs:
         env:
           REX_TEST_TMPDIR: ${{ runner.temp }}
           TMPDIR: ${{ runner.temp }}
-          # Temporary diagnostic amplification for the intermittent hosted failure.
-          CI_REPETITIONS: ${{ matrix.runner == 'ubuntu-24.04' && 20 || 1 }}
-        run: |
-          for ((attempt = 1; attempt <= CI_REPETITIONS; attempt++)); do
-            echo "Full suite attempt $attempt/$CI_REPETITIONS"
-            sh tests/run.sh
-          done
+        run: sh tests/run.sh

@@ -275,9 +275,9 @@ paths.
 
 Installer tests use temporary homes and fake service commands for both macOS
 and Linux, never real service installation. Socket and process-ID checks guard
-the private server before stop or kill operations. The suite has been run on
-macOS; Linux service generation is fixture-tested, not verified against a real
-Linux service manager.
+the private server before stop or kill operations. CI runs the full suite on
+macOS 15, Ubuntu 24.04, and Ubuntu 26.04. Linux service generation remains
+fixture-tested, not verified against a real Linux service manager.
 
 ## Rex references
 
