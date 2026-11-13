@@ -1,0 +1,71 @@
+name: Tests
+
+# No path filters or canceled superseded runs: documentation-only pushes and
+# rapid successive pushes should receive test results too.
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+# Test code needs to read the checkout, not write to the repository.
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: Tests (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      # A failure on one platform should not hide the other platform's result.
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            download_secret: REX_LINUX_AMD64_URL
+            sha256: 31610ee5df13eb7f15e4ac1bd22753afd93839c6c8fa5e79d00681b934f70b84
+          - runner: ubuntu-26.04
+            download_secret: REX_LINUX_AMD64_URL
+            sha256: 31610ee5df13eb7f15e4ac1bd22753afd93839c6c8fa5e79d00681b934f70b84
+          - runner: macos-15
+            download_secret: REX_MACOS_ARM64_URL
+            sha256: 4d78fc6b72b86c2e85fc54db1f6a39555d4bd4960633975df7b24426bfe2de71
+    steps:
+      # Pin dependencies so unrelated upstream releases cannot change a PR's
+      # result. Do not leave checkout credentials available to tested code.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Linux test prerequisites
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes zsh
+
+      - name: Prepare Rex 0.1.0-preview.18
+        shell: bash
+        env:
+          REX_DOWNLOAD_URL: ${{ secrets[matrix.download_secret] }}
+          REX_SHA256: ${{ matrix.sha256 }}
+        # Only unpack the CLI into runner scratch space. An installer could
+        # register services and interfere with the private-server safety checks.
+        run: |
+          if [ -z "$REX_DOWNLOAD_URL" ]; then
+            echo "::error::Rex download secrets are unavailable. Fork PRs need a reviewed maintainer branch for the full suite."
+            exit 1
+          fi
+          curl --fail --silent --show-error --location --retry 3 \
+            --output "$RUNNER_TEMP/rex.zip" \
+            "$REX_DOWNLOAD_URL"
+          printf '%s  %s\n' "$REX_SHA256" "$RUNNER_TEMP/rex.zip" | shasum -a 256 --check -
+          unzip -q "$RUNNER_TEMP/rex.zip" -d "$RUNNER_TEMP/rex-bin"
+          chmod +x "$RUNNER_TEMP/rex-bin/rex"
+          printf '%s\n' "$RUNNER_TEMP/rex-bin" >>"$GITHUB_PATH"
+          "$RUNNER_TEMP/rex-bin/rex" version
+
+      - name: Run full test suite
+        env:
+          REX_TEST_TMPDIR: ${{ runner.temp }}
+          TMPDIR: ${{ runner.temp }}
+        run: sh tests/run.sh
