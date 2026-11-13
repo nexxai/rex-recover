@@ -7,6 +7,44 @@ after Rex returns.
 **There are no built-in monitored apps.** Every configured executable uses the
 same launch recording and recovery path, with or without arguments.
 
+## Interactive installation and removal
+
+From this checkout, in a terminal outside Rex, run `sh install.sh`. Stop any
+manual watcher first. The installer detects macOS or Linux, asks for executable
+names without preselecting any, and separately offers shell and service setup.
+Its final confirmation happens before installation files are changed.
+
+The runtime is copied into your user application-data directory, so the
+checkout does not need to stay in place:
+
+- macOS: `~/Library/Application Support/rex-recover`.
+- Linux: `~/.local/share/rex-recover`.
+- With `XDG_DATA_HOME` set: `$XDG_DATA_HOME/rex-recover` on either platform.
+
+Command launchers are installed in `~/.local/bin`. The managed shell block adds
+that directory to `PATH`, but loads capture only in Rex terminals. Existing
+dotfile symlinks are preserved. Reinstalling updates rather than duplicates
+the block, and backs up files whose contents change.
+
+macOS service setup requires an available launchd GUI user domain. Linux
+service setup requires an available systemd user manager. If no usable manager
+is detected, installation can proceed without a service; run the watcher
+manually outside Rex instead. The installer never starts or stops Rex.
+
+Open new terminals afterward and launch newly monitored commands once to
+capture their launch details.
+
+To remove a managed installation, run `~/.local/bin/rex-recover-uninstall`, or
+`sh uninstall.sh` from this checkout. Removal stops the installed watcher
+service and removes its shell block and unchanged installer-owned files.
+Modified installed files and edited managed blocks require further approval.
+Unrelated settings, files, and backups are preserved.
+
+App configuration, recovery state, and watcher logs are kept by default;
+deleting them is a separate prompt. Even that cleanup leaves unrelated files
+alone. Open new terminals after uninstalling to discard already-loaded shell
+functions.
+
 ## Configure
 
 Create a plain-text file at:
@@ -84,8 +122,8 @@ sh bin/rex-recover \
 - The Rex CLI is selected from `--rex`, then `$REX_BIN`, then `rex` on `PATH`.
   On macOS the launcher also discovers Rex's bundled CLI at
   `~/Library/Application Support/com.superlogical.rex/RexServer/Versions/Current/Rex Server.app/Contents/MacOS/rex`.
-- State defaults to `$XDG_STATE_HOME/rex-recover`, or
-  `~/.local/state/rex-recover`.
+- State is selected from `--state-dir`, then `$REX_RECOVER_STATE_DIR`, then
+  `$XDG_STATE_HOME/rex-recover`, or `~/.local/state/rex-recover`.
 - `--interval` controls fallback scans in seconds. Process-change events also
   trigger scans.
 - `--server unix:///absolute/path/rex.sock` selects a separate local server.
@@ -230,8 +268,11 @@ and launch folders after the fixture apps change directory. Your live server
 is left alone. The suite requires zsh and retains test artifacts at the printed
 paths.
 
-Verified on macOS with Rex `0.1.0-preview.14`. Linux paths have not been
-exercised here.
+Installer tests use temporary homes and fake service commands for both macOS
+and Linux, never real service installation. Socket and process-ID checks guard
+the private server before stop or kill operations. The suite has been run on
+macOS; Linux service generation is fixture-tested, not verified against a real
+Linux service manager.
 
 ## Rex references
 

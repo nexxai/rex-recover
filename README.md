@@ -1,31 +1,65 @@
 # Rex Recover
 
-Restore configured apps in their original Rex terminals after the server
-returns. Every app uses the same capture path: original launch folder and exact
-arguments, including none. No monitored apps are built in.
+Get back to work after a Rex server restart without rebuilding your terminal
+workflow by hand.
 
-## Install
+## Why it exists
 
-From a regular terminal **outside Rex**, run:
+Rex can bring back your sessions and terminal layout, but the commands you were
+running still need to be launched again. If your work spans several projects
+and panes, that means remembering which tool belonged where, which folder you
+started it in, and which arguments you used.
+
+Rex Recover remembers the commands you choose to monitor and relaunches those
+last seen running in their original terminals, from their original folders,
+with their original arguments. Commands with no arguments work the same way.
+
+It is useful when restarting a collection of editors, development servers, or
+other terminal tools takes you out of your work. You choose what is eligible;
+there are no built-in monitored apps.
+
+This relaunches commands, not their in-memory state or unsaved work. It uses
+the last observed active commands, not your terminal history. There is a small
+observation gap if a command starts or finishes just before Rex stops.
+
+## Why a watcher and a shell integration?
+
+Each solves a different part of the problem:
+
+- **The shell integration remembers how you started a command.** Rex's process
+  information does not include its arguments. Capturing them at launch also
+  preserves the starting folder, even if the app changes folders later.
+- **The background watcher remembers what was still running.** It lives outside
+  Rex so it can survive a server shutdown, wait for Rex to return, and restore
+  the last observed active commands instead of replaying old ones.
+
+The watcher never starts Rex for you. It waits until you bring Rex back.
+
+## Get started
+
+Requires Rex, macOS or Linux, and zsh or bash for automatic launch capture.
+See the [manual](docs/manual.md) for prerequisites and other-shell options.
+
+From this checkout, in a terminal **outside Rex**, run:
 
 ```sh
 sh install.sh
 ```
 
-The installer detects macOS or Linux and walks you through:
+The installer asks which commands to monitor and whether to set up shell
+capture and a background user service. It explains its changes and asks before
+applying them. No `sudo` is needed; changed files are backed up.
 
-- Choosing app names, with real-life examples but no preselected apps.
-- Copying the runtime into your user application-data directory.
-- Adding a managed startup block for zsh or bash.
-- Optionally installing a launchd or systemd **user** service.
+Stop any manually running watcher first. After installation, open new terminals
+and launch your chosen commands once so their launch details can be recorded.
 
-It shows the locations and asks before making changes. Changed files are backed
-up, existing dotfile symlinks are preserved, and rerunning it updates the setup
-without duplicating shell entries. No `sudo` or checkout relocation is needed.
-If a manual watcher is running, stop it with Ctrl-C first.
+To change the monitored commands, rerun the installer. The app list is a plain
+text file, normally `~/.config/rex-recover/apps.conf`, with one executable name
+per line.
 
-Open new terminals afterward and relaunch newly monitored apps once so their
-launch arguments can be captured. The installer never starts or stops Rex.
+**Only monitor commands you are comfortable running again.** Recorded arguments
+may contain secrets. The [manual](docs/manual.md) explains storage, capture
+limits, troubleshooting options, and manual setup.
 
 ## Uninstall
 
@@ -35,34 +69,6 @@ launch arguments can be captured. The installer never starts or stops Rex.
 
 Or run `sh uninstall.sh` from this checkout.
 
-The uninstaller stops the installed watcher service, removes the managed shell
-block, and removes installer-owned files. Unrelated settings and files are left
-alone. Modified installed files and edited managed blocks require confirmation.
-App config, recovery state, and logs are **kept by default**; deleting them is a
-separate choice. Backups are retained.
-
-## Configuration
-
-Edit `~/.config/rex-recover/apps.conf` (or the selected XDG/custom location).
-It contains one executable name per line, with optional `#` comments.
-
-Rerun the installer to update the app list, or restart the watcher and re-source
-the shell integration after editing it manually.
-
-macOS uses launchd when a GUI user domain is available. Linux uses systemd when
-the user manager is available; otherwise the installer skips service setup.
-Automatic capture supports zsh and bash. Other shells can use the explicit
-recorder. See the [manual](docs/manual.md) for advanced paths, manual setup,
-service commands, and capture limits.
-
-## Tests
-
-```sh
-sh tests/run.sh
-```
-
-Installer tests use temporary homes and fake service commands for both
-platforms—never real service installation. Recovery tests use invented apps
-and a separate Rex server, with socket/PID checks before stopping or killing it.
-Linux service generation is fixture-tested; it has not been exercised on an
-actual Linux service manager here.
+This stops the watcher service and removes its managed shell setup and installed
+files. Unrelated settings and backups stay in place. Config, recovery state,
+and logs are kept unless you separately agree to delete them.
