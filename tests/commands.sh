@@ -1,4 +1,7 @@
 #!/bin/sh
+# These tests inspect both the app's received argv and its on-disk launch record:
+# a wrapper can run a command correctly yet save an unusable recovery command.
+# A private temporary tree isolates state and retains evidence for failures.
 set -eu
 umask 077
 
@@ -11,6 +14,9 @@ trap 'echo "Command test artifacts: $temporary"' EXIT
 printf '%s\n' sample-worker sample-editor sample-viewer custom-worker >"$temporary/apps.conf"
 export REX_RECOVER_CONFIG="$temporary/apps.conf"
 
+# Invented names prove capture is config-driven rather than tied to supported
+# products. Each harmless fixture exposes argument, exit-status, and umask
+# changes instead of depending on the behavior of a real installed app.
 for app in sample-worker sample-editor sample-viewer custom-worker; do
   cat >"$temporary/bin/$app" <<'SH'
 #!/bin/sh
@@ -23,15 +29,20 @@ SH
   TEST_DIRECTORY="$temporary" REX_SESSION=session:work REX_BLOCK="block:$app" \
     REX_RECOVER_STATE_DIR="$temporary/state" PATH="$temporary/bin:$PATH" \
     zsh -f -s -- "$root" "$app" <<'ZSH'
+# Users reload their startup files; capture must not accumulate wrapper layers.
 source "$1/shell/rex-recover.zsh"
 source "$1/shell/rex-recover.zsh"
 umask 022
 "$2" run dev -- "a b" "a'b" '$(touch nope)' ""
 [[ $? == 23 ]]
 ZSH
+  # Spaces, apostrophes, literal command substitution, and an empty argument
+  # distinguish a true argv round trip from a lossy command-line reconstruction.
   printf '%s\000' run dev -- "a b" "a'b" '$(touch nope)' "" >"$temporary/expected-args"
   cmp "$temporary/expected-args" "$temporary/actual-args"
   [ "$(cat "$temporary/actual-umask")" = 0022 ]
+  # Inspect recorded fields separately from actual execution so a correct app
+  # invocation cannot hide a mismatched terminal, executable, or private mode.
   tr '\000' '\n' <"$temporary/state/launches/block:$app" >"$temporary/record-lines"
   [ "$(sed -n '1p' "$temporary/record-lines")" = rex-recover-launch-v1 ]
   [ "$(sed -n '2p' "$temporary/record-lines")" = session:work ]
@@ -45,6 +56,8 @@ ZSH
   echo "ok - $app captures exact arguments and preserves exit status and umask"
 done
 
+# A shell startup file can be shared across terminal apps. No Rex identity means
+# no recovery destination, not permission to create misleading launch state.
 TEST_DIRECTORY="$temporary" PATH="$temporary/bin:$PATH" \
   env -u REX_SESSION -u REX_BLOCK REX_RECOVER_STATE_DIR="$temporary/outside" \
   zsh -f -s -- "$root" <<'ZSH'
@@ -55,6 +68,8 @@ ZSH
 [ ! -d "$temporary/outside" ]
 echo "ok - shell integration outside Rex does not record commands"
 
+# Capture is optional convenience; overwriting existing customization would be
+# more harmful than leaving that particular command unwrapped.
 zsh -f -s -- "$root" <<'ZSH'
 function sample-worker { print -r -- existing-user-function }
 alias sample-editor=sample-viewer
@@ -64,6 +79,8 @@ source "$1/shell/rex-recover.zsh"
 ZSH
 echo "ok - existing shell functions and aliases are preserved"
 
+# Control characters cannot safely be typed back into a terminal. Refusing to
+# record them must not mutate the original invocation or stop the user's app.
 TEST_DIRECTORY="$temporary" REX_SESSION=session:work REX_BLOCK=block:unsupported \
   REX_RECOVER_STATE_DIR="$temporary/state" PATH="$temporary/bin:$PATH" \
   zsh -f -s -- "$root" 2>"$temporary/unsupported.log" <<'ZSH'
@@ -78,6 +95,8 @@ line two' >"$temporary/expected-args"
 cmp "$temporary/expected-args" "$temporary/actual-args"
 echo "ok - unsupported terminal control characters do not break the original command"
 
+# No-argument apps are not a special recovery mode. This guards against either
+# skipping their launch record or inventing one empty argument.
 TEST_DIRECTORY="$temporary" REX_SESSION=session:work REX_BLOCK=block:noargs \
   REX_RECOVER_STATE_DIR="$temporary/state" PATH="$temporary/bin:$PATH" \
   zsh -f -s -- "$root" <<'ZSH'
@@ -90,6 +109,8 @@ tr '\000' '\n' <"$temporary/state/launches/block:noargs" >"$temporary/record-lin
 [ "$(wc -l <"$temporary/record-lines" | tr -d ' ')" = 8 ]
 echo "ok - a configured command without arguments uses the same launch capture"
 
+# Names alone cannot establish ownership after the user redefines a wrapper.
+# Invalid config must also leave the previous valid wrapper set usable.
 zsh -f -s -- "$root" "$temporary" <<'ZSH'
 source "$1/shell/rex-recover.zsh"
 function sample-worker { print -r -- user-modified-function }
@@ -107,6 +128,8 @@ source "$1/shell/rex-recover.zsh"
 ZSH
 echo "ok - config reload removes only owned wrappers and rejects partial invalid updates"
 
+# Removing installed files cannot unload existing interactive functions. A
+# missing recorder must degrade to the command, not break the user's terminal.
 printf 'sample-worker\n' >"$temporary/apps.conf"
 TEST_DIRECTORY="$temporary" REX_SESSION=session:work REX_BLOCK=block:removed \
   REX_RECOVER_STATE_DIR="$temporary/state" PATH="$temporary/bin:$PATH" \

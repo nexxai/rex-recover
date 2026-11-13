@@ -1,7 +1,13 @@
 #!/bin/sh
+# Keep this supervisor outside Rex: the Lua worker loses its connection when
+# Rex stops, but this process must stay alive to reconnect after Rex returns.
+# Continuing with missing settings could target the wrong state directory.
+# State must also stay private because command arguments can contain secrets.
 set -eu
 umask 077
 
+# Installed copies must work independently of the checkout and launch folder.
+# A user's CDPATH can make cd print extra text, corrupting this captured path.
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 rex_bin=${REX_BIN:-}
 state_dir=${REX_RECOVER_STATE_DIR:-${XDG_STATE_HOME:-"$HOME/.local/state"}/rex-recover}
@@ -9,10 +15,14 @@ server=
 config=${REX_RECOVER_CONFIG:-${XDG_CONFIG_HOME:-"$HOME/.config"}/rex-recover/apps.conf}
 interval=2
 
+# Interactive shells can use environment defaults, while a service needs to
+# pin its own paths without depending on the environment it inherited.
 usage() {
   echo "Usage: rex-recover [--rex PATH] [--state-dir DIR] [--server unix://PATH] [--config FILE] [--interval SECONDS]"
 }
 
+# Paths can contain spaces or shell syntax. Parsing option/value pairs as
+# separate arguments avoids accidentally treating their contents as code.
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --help|-h) usage; exit 0 ;;
@@ -31,11 +41,16 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+# Recovery checks local process identities and files, so a remote connection
+# would not provide the information needed to make a safe recovery decision.
 case "$server" in
   ""|unix://*) ;;
   *) echo "Only local Unix-socket servers are supported." >&2; exit 2 ;;
 esac
 
+# Silently replacing a bad explicit CLI override could connect through the
+# wrong installation. Automatic macOS discovery uses Versions/Current so
+# upgrading Rex does not leave the watcher pinned to an obsolete version.
 if [ -z "$rex_bin" ]; then
   rex_bin=$(command -v rex 2>/dev/null || :)
   if [ -z "$rex_bin" ] && [ "$(uname -s)" = Darwin ]; then
@@ -50,8 +65,14 @@ if [ ! -f "$resolved_rex" ] || [ ! -x "$resolved_rex" ]; then
 fi
 rex_bin=$resolved_rex
 
+# Fail before entering the reconnect loop if the shared app list is invalid.
+# Otherwise a configuration typo would produce repeated connection attempts.
 if ! "$root/bin/rex-recover-config" "$config" >/dev/null; then exit 2; fi
 
+# Two watchers could race to replay the same command. A kernel-held lock avoids
+# both that race and the stale-lock problem of a PID file after a crash.
+# Inheriting descriptor 9 keeps a surviving worker protected if its supervisor
+# dies; the lock is released when the last holder exits.
 mkdir -p -- "$state_dir"
 state_dir=$(CDPATH= cd -- "$state_dir" && pwd)
 exec 9>"$state_dir/watcher.lock"
@@ -65,6 +86,9 @@ else
 fi
 child=
 
+# Stopping recovery must not stop the user's work. Only our current child is
+# ours to terminate; Rex and its terminal apps are not. Tracking the retry
+# delay too avoids making Ctrl-C wait for that delay to finish.
 cleanup() {
   if [ -n "$child" ]; then
     kill "$child" 2>/dev/null || :
@@ -76,6 +100,10 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
 
+# Re-evaluating a command string would misinterpret paths containing quotes or
+# spaces. Keeping argv separate also lets the worker share the exact parser
+# and config used by capture, without a second interpretation of the app list.
+# Autostart must stay disabled: a retry is not permission to bring Rex back.
 set -- "$rex_bin" --autostart=false
 if [ -n "$server" ]; then set -- "$@" --server "$server"; fi
 set -- "$@" do "$root/watch.lua" --all --fail-fast \
@@ -83,6 +111,9 @@ set -- "$@" do "$root/watch.lua" --all --fail-fast \
   "launcher=$root/bin/rex-recover-run" "config=$config" \
   "config_reader=$root/bin/rex-recover-config"
 
+# Connection failure is normal while Rex is down, not a reason to abandon
+# recovery. A delay avoids a busy retry loop. Background children let shell
+# traps interrupt the wait instead of leaving shutdown stuck behind the CLI.
 while :; do
   "$@" &
   child=$!

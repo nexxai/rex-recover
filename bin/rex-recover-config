@@ -1,26 +1,43 @@
 #!/bin/sh
+# Capture and recovery must agree on which apps are eligible. One data-only
+# parser avoids divergent rules and prevents configuration from executing code.
+# Callers must check the exit status before using any output: a bad later line
+# invalidates the whole list, even if earlier names have already been printed.
 set -eu
 
+# Combining files here would make it harder to keep capture and recovery on
+# the same app list; callers must choose one configuration explicitly.
 if [ "$#" -ne 1 ]; then
   echo "Usage: rex-recover-config FILE" >&2
   exit 2
 fi
 file=$1
+# An absolute path also keeps a relative filename beginning with "-" from
+# being interpreted as an awk option.
 case "$file" in /*) ;; *) file="$PWD/$file" ;; esac
 if [ ! -f "$file" ] || [ ! -r "$file" ]; then
   echo "Rex Recover: config not readable: $file. Create apps.conf or select one with --config / REX_RECOVER_CONFIG." >&2
   exit 2
 fi
 
+# Names become shell function names later, so punctuation with shell meaning
+# cannot be accepted as ordinary data. A fixed locale keeps this boundary
+# consistent across machines instead of depending on the user's language.
 LC_ALL=C awk '
   function fail(message) {
+    # A line-specific error lets users fix the config without guessing which
+    # consumer rejected it.
     print FILENAME ":" FNR ": " message > "/dev/stderr"
     exit 2
   }
   {
+    # Editing on another platform or annotating the list should not change
+    # which executable a line refers to.
     sub(/\r$/, "")
     sub(/#.*/, "")
     if (NF == 0) next
+    # Per-app modes would split the capture/recovery contract. Reject mistakes
+    # rather than guessing intent; an empty config must not enable defaults.
     if (NF != 1) fail("expected one executable name per line, with no modifiers")
     if ($1 !~ /^[a-zA-Z0-9_][a-zA-Z0-9_.+-]*$/)
       fail("expected a bare executable name")

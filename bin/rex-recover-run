@@ -1,50 +1,81 @@
 #!/bin/sh
+# Rex's process API omits arguments, and apps can change their own cwd. Launch
+# time is the point where the original invocation is still available intact.
+# A separate executable keeps that contract reusable by other shell integrations.
 set -eu
 
+# A flattened command line cannot distinguish an empty argument from no
+# argument, or a quoted space from an argument separator.
 if [ "$#" -eq 0 ]; then
   echo "Usage: rex-recover-run COMMAND [ARGUMENTS...]" >&2
   exit 2
 fi
 requested=$1
 shift
+# A future shell may have a different PATH. Remember the executable chosen now
+# rather than resolving the same name to a different program during recovery.
 executable=$(command -v "$requested" 2>/dev/null || :)
 if [ ! -f "$executable" ] || [ ! -x "$executable" ]; then
   echo "Command not found: $requested" >&2
   exit 127
 fi
+# The recording subshell is not the process that will become the app. Using
+# its identity would make the watcher reject the launch as soon as it exits.
 owner_pid=$$
 
+# Recording must not change the app's permissions or leave cleanup traps in
+# its execution path. A subshell isolates those side effects; recording failure
+# must never prevent the user's original command from running.
 record_launch() (
-  # Keep private recording permissions out of the application's environment.
+  # Arguments may contain secrets, but tightening the app's own umask would
+  # unexpectedly change permissions on files it creates.
   umask 077
+  # IDs become filenames; trusting arbitrary values could escape the launch
+  # directory or attach a record to an unrelated terminal.
   case "$REX_SESSION" in session:*) ;; *) return 1 ;; esac
   case "$REX_BLOCK" in block:*) ;; *) return 1 ;; esac
   case "$REX_SESSION$REX_BLOCK" in *[!a-zA-Z0-9:-]*) return 1 ;; esac
   app=${requested##*/}
+  # An app can cd after startup; its later cwd cannot tell us where to relaunch.
   directory=$(pwd -P) || return 1
+  # Recovery types into a terminal. Do not store control characters that could
+  # submit extra input or alter terminal behavior, even though NUL framing
+  # itself could represent some of them.
   for value in "$app" "$directory" "$executable" "$@"; do
     cleaned=$(printf '%s' "$value" | LC_ALL=C tr -d '\000-\037\177') || return 1
     [ "$cleaned" = "$value" ] || return 1
   done
+  # The OS can reuse a PID after the app exits. Its start time distinguishes
+  # the original launch from an unrelated process that later receives that PID.
+  # Locale-dependent timestamp text would make the comparison unreliable.
   started_at=$(LC_ALL=C ps -p "$owner_pid" -o lstart= | sed 's/^ *//;s/ *$//')
   [ -n "$started_at" ] || return 1
   state_dir=${REX_RECOVER_STATE_DIR:-${XDG_STATE_HOME:-"$HOME/.local/state"}/rex-recover}
   launch_dir=${REX_RECOVER_LAUNCH_DIR:-"$state_dir/launches"}
   case "$launch_dir" in /*) ;; *) return 1 ;; esac
   mkdir -p -- "$launch_dir" || return 1
+  # A concurrent watcher must see either the old record or a complete new one,
+  # never half an argument array. Same-directory rename provides that boundary;
+  # abandoned staging files must not accumulate when writing fails.
   temporary=$(mktemp "$launch_dir/.launch.XXXXXX") || return 1
   trap 'rm -f -- "$temporary"' EXIT
+  # Shell strings cannot contain NUL, making it an unambiguous delimiter even
+  # for empty arguments. Text joined with spaces or quotes would lose the
+  # original boundaries and could turn data into shell syntax on recovery.
   printf '%s\000' rex-recover-launch-v1 "$REX_SESSION" "$REX_BLOCK" \
     "$owner_pid" "$started_at" "$app" "$directory" "$executable" "$@" \
     >"$temporary" || return 1
   mv -f -- "$temporary" "$launch_dir/$REX_BLOCK"
 )
 
+# A launch outside Rex has no pane to recover into. Inside Rex, capture is
+# best-effort: losing recovery is preferable to breaking the requested command.
 if [ -n "${REX_SESSION:-}" ] && [ -n "${REX_BLOCK:-}" ]; then
   if ! record_launch "$@"; then
     echo "Rex Recover: could not record $requested; running it without argument recovery." >&2
   fi
 fi
 
-# Preserve the process ID, terminal, exit status, and signal behavior.
+# An extra waiting process would change signal delivery and break the recorded
+# PID's relationship to the app. exec also leaves exit status under app control.
 exec "$executable" "$@"

@@ -1,4 +1,7 @@
 #!/bin/sh
+# Installation touches startup files and services; tests must prove its behavior
+# without obtaining authority over the developer's actual home or service manager.
+# Keep the sandbox private but retained so a failure's generated files are inspectable.
 set -eu
 umask 077
 
@@ -7,10 +10,15 @@ temporary=$(mktemp -d "${REX_TEST_TMPDIR:-${TMPDIR:-/tmp}}/rex-setup-tests.XXXXX
 temporary=$(CDPATH= cd -- "$temporary" && pwd -P)
 trap 'echo "Setup test artifacts: $temporary"' EXIT
 
+# Special characters in the fake home expose shell/XML/systemd escaping mistakes
+# that a simple path would hide. Every service operation goes through a fake
+# executable; unexpected Rex use is evidence of violating installer boundaries.
 make_environment() {
   environment="$temporary/$1"
   home="$environment/User's Home & 50% dollars\$"
   mkdir -p "$environment/bin" "$home"
+  # One fake dispatcher keeps the platform cases comparable. Unknown operations
+  # fail rather than silently pretending an unmodeled service action succeeded.
   for tool in uname id launchctl systemctl rex; do
     cat >"$environment/bin/$tool" <<'SH'
 #!/bin/sh
@@ -45,6 +53,9 @@ SH
   done
 }
 
+# Ambient XDG and capture settings must not redirect a test into real user data.
+# Scripted answers make consent choices explicit; captured logs explain a failed
+# prompt sequence without requiring another interactive installation.
 run_installer() {
   answers=$1
   if ! printf '%s' "$answers" | env -u XDG_DATA_HOME -u ZDOTDIR -u REX_RECOVER_CONFIG \
@@ -57,6 +68,8 @@ run_installer() {
   fi
 }
 
+# Both generated service formats need coverage on this host. These are fixture
+# tests, not evidence that a real Linux systemd manager has accepted the unit.
 for platform in Darwin Linux; do
   make_environment "$platform"
   if [ "$platform" = Darwin ]; then
@@ -71,6 +84,7 @@ for platform in Darwin Linux; do
     service="$home/.config/systemd/user/rex-recover.service"
   fi
   printf 'export KEEP_USER_SETTING=1\n' >"$startup"
+  # Choose invented apps explicitly: examples in a prompt are never defaults.
   run_installer 'sample-worker, sample-editor
 y
 y
@@ -87,21 +101,28 @@ y
   cmp "$environment/expected-apps" "$home/.config/rex-recover/apps.conf"
   [ "$(grep -c '^# >>> Rex Recover >>>$' "$startup")" = 1 ]
   if [ "$platform" = Darwin ]; then
+    # A syntactically valid plist can still contain incorrectly escaped paths;
+    # both syntax and the deliberately troublesome path deserve an assertion.
     if command -v plutil >/dev/null; then plutil -lint "$service"; fi
     grep -q '&amp;' "$service"
     grep -q 'boot.*gui/501' "$environment/services"
   else
+    # Quotes alone do not suppress systemd's percent and dollar expansions.
     grep -q '^Type=exec$' "$service"
     grep -Fq '%%' "$service"
     grep -Fq '$$' "$service"
     grep -q 'systemctl --user enable --now rex-recover.service' "$environment/services"
   fi
+  # A correct-looking startup file is insufficient if the target shell cannot
+  # actually load its hook while preserving a pre-existing personal setting.
   env HOME="$home" PATH="$environment/bin:$PATH" \
     REX_SESSION=session:fixture REX_BLOCK=block:fixture \
     "$shell" -c '. "$1"; type sample-worker >/dev/null; test "$KEEP_USER_SETTING" = 1' \
     -- "$startup"
   echo "ok - $platform installer creates a configured runtime, shell hook, and user service"
 
+  # Reinstallation is a normal update path, not permission to append another
+  # copy of the managed block or erase settings added since the first install.
   run_installer '
 y
 y
@@ -109,11 +130,14 @@ y
 '
   [ "$(grep -c '^# >>> Rex Recover >>>$' "$startup")" = 1 ]
   printf 'export USER_ADDED_LATER=1\n' >>"$startup"
+  # Declining uninstall must leave even a running service untouched.
   printf 'n\n' | env TEST_PLATFORM="$platform" TEST_ENV="$environment" HOME="$home" \
     PATH="$environment/bin:$PATH" /bin/sh "$runtime/uninstall.sh" \
     >"$environment/cancel-uninstall.log" 2>&1
   [ -f "$environment/active" ]
   [ -f "$runtime/recovery.lua" ]
+  # Default removal leaves choices and evidence available for a later reinstall.
+  # Comparing the entire startup file catches collateral edits outside markers.
   printf 'y\nn\n' | env TEST_PLATFORM="$platform" TEST_ENV="$environment" HOME="$home" \
     PATH="$environment/bin:$PATH" /bin/sh "$runtime/uninstall.sh" \
     >"$environment/uninstall.log" 2>&1
@@ -129,6 +153,8 @@ y
   echo "ok - $platform uninstall stops the service and preserves user settings and app configuration"
 done
 
+# Optional integrations must truly be optional. Even explicit data-purge consent
+# does not extend to modified runtime code or unrelated files in the same tree.
 make_environment minimal
 platform=Linux
 shell=/bin/bash
@@ -159,6 +185,8 @@ grep -q 'user modification' "$runtime/recovery.lua"
 [ -f "$runtime/user-notes" ]
 echo "ok - optional integration can be declined and purge preserves modified or unrelated files"
 
+# Planning an install is not consent to apply it. The final "no" must leave
+# config, runtime, command directories, and personal shell settings untouched.
 make_environment cancelled
 platform=Darwin
 shell=/bin/zsh
@@ -175,6 +203,8 @@ n
 ! grep -q 'Rex Recover' "$startup"
 echo "ok - cancelling the final installation confirmation leaves user files untouched"
 
+# Replacing a startup symlink would silently detach a dotfile-manager checkout.
+# Both installation and removal must preserve that relationship.
 make_environment symlink
 platform=Darwin
 shell=/bin/zsh
@@ -195,6 +225,8 @@ printf 'export KEEP_USER_SETTING=1\n' >"$environment/expected-startup"
 cmp "$environment/expected-startup" "$environment/dotfiles/zshrc"
 echo "ok - shell startup symlinks are preserved during installation and removal"
 
+# Markers are not blanket ownership of future user edits inside them. Declining
+# removal of an edited block must preserve those edits even during uninstall.
 make_environment edited-block
 platform=Darwin
 shell=/bin/zsh
@@ -215,6 +247,8 @@ grep -q 'USER_EDIT_INSIDE_BLOCK' "$startup"
 grep -q 'Kept the edited shell block' "$environment/uninstall.log"
 echo "ok - uninstall asks before removing user edits inside its managed block"
 
+# A systemctl binary does not imply a usable user manager. That limitation must
+# not prevent an otherwise valid manual installation or trigger sudo fallback.
 make_environment no-manager
 platform=Linux
 shell=/bin/bash
@@ -227,6 +261,7 @@ grep -q 'service setup will be skipped' "$environment/install.log"
 [ ! -f "$home/.config/systemd/user/rex-recover.service" ]
 echo "ok - hosts without a usable user service manager can install without a service"
 
+# Unknown platforms must not receive guessed paths or partially installed files.
 make_environment unsupported
 if env TEST_PLATFORM=UnsupportedOS TEST_ENV="$environment" HOME="$home" \
   PATH="$environment/bin:$PATH" /bin/sh "$root/install.sh" >"$environment/install.log" 2>&1; then
