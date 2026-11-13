@@ -72,3 +72,13 @@ Or run `sh uninstall.sh` from this checkout.
 This stops the watcher service and removes its managed shell setup and installed
 files. Unrelated settings and backups stay in place. Config, recovery state,
 and logs are kept unless you separately agree to delete them.
+
+## Contribute
+
+Contributions are welcome, especially integrations for shells beyond zsh and
+bash. Every logic change must include a corresponding test. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for how to get involved.
+
+## License
+
+[MIT](LICENSE).
