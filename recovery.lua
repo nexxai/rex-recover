@@ -10,6 +10,15 @@ local function idle_shell(processes)
   return true
 end
 
+local function starting_shell(processes)
+  local foreground, child = processes.foreground, processes.child
+  -- A terminal briefly identifies as Rex, then login, before its shell exists.
+  -- Consuming recovery here loses it during startup. Only defer for the root
+  -- child: an actual command inside a user's shell must still be treated as busy.
+  return foreground and child and foreground.pid == child.pid
+    and (foreground.name == "rex" or foreground.name == "login")
+end
+
 local function safe_text(value, allow_empty)
   return type(value) == "string" and (allow_empty or value ~= "")
     and not value:find("%c")
@@ -275,7 +284,7 @@ function M.new(api, options)
         or observation.session_id ~= record.session_id or apps[key]
         or observation.processes.last_exit then
         pending[key] = nil
-      elseif observation.processes.foreground then
+      elseif observation.processes.foreground and not starting_shell(observation.processes) then
         pending[key] = nil
         if idle_shell(observation.processes) then
           if record.tracked and (not safe_text(options.launcher)
@@ -294,6 +303,14 @@ function M.new(api, options)
       version = 1, host_id = status.host_id, instance_id = status.instance_id,
       apps = apps, pending = pending,
     }
+    -- Local PID checks can outlive the server that supplied the process list.
+    -- If Rex died in that window, missing PIDs are not intentional app exits
+    -- and must not replace the last durable checkpoint with an incomplete scan.
+    local current_status, status_err = api.call("server.status")
+    if not current_status then return nil, status_err end
+    if current_status.host_id ~= status.host_id or current_status.instance_id ~= status.instance_id then
+      return nil, "server changed during the scan; checkpoint left untouched"
+    end
     local saved, save_err = M.save(options.state_path, next_state, api.json)
     if not saved then return nil, save_err end
     state = next_state

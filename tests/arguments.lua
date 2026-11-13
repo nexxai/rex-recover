@@ -39,6 +39,13 @@ local function process(fixture, index)
   }).foreground
 end
 
+local function launch_log()
+  local result, err = rex.exec({ "ls", "-1", root .. "/apps/logs" })
+  assert(result, err)
+  assert(result.ok, result.stderr)
+  return result.stdout
+end
+
 local fixture
 if phase == "setup" then
   local windows, directories = {}, {}
@@ -128,12 +135,19 @@ elseif phase == "exit" then
     end
     return true
   end)
+  fixture.launch_log = launch_log()
+  save(fixture)
 elseif phase == "not-restored" then
   rex.sleep(1)
+  -- Rex restores the account's login shell, not the fixture's initial zsh.
+  -- The shell's name is not evidence of replay: each actual app launch also
+  -- creates a log file, so no new files may appear after an intentional exit.
+  local shells = { sh = true, bash = true, zsh = true, fish = true, dash = true, ksh = true }
   for index in ipairs(apps) do
     local current = assert(process(fixture, index))
-    assert(current.name == "zsh", "completed command was restarted")
+    assert(shells[current.name], "terminal is not idle after command exit: " .. current.name)
   end
+  assert(launch_log() == fixture.launch_log, "completed command was restarted")
 else
   error("unknown phase: " .. tostring(phase))
 end

@@ -22,6 +22,23 @@ Do not share real recovery state or command arguments containing secrets.
 4. Explain the problem, why you chose the approach, and how you tested it.
    Update the docs when user-facing behavior changes.
 
+All changes to `main` must go through a pull request, including maintainer
+changes. GitHub Actions runs the full suite on macOS, Ubuntu 24.04, and Ubuntu
+26.04 for pushes to every branch and for pull requests. Reviewer approval is
+not mandatory, so maintainers can merge their own PRs.
+
+Rex download URLs live in the repository's Actions secrets, not in the workflow.
+GitHub does not expose those secrets to fork PRs. For those contributions, a
+maintainer must review the changes and place them on a repository branch before
+the full CI suite can run. Do not switch to `pull_request_target` to bypass
+that protection.
+
+CI pins Rex to `0.1.0-preview.18` for reproducibility. Updating it requires
+updating both private download secrets (`REX_LINUX_AMD64_URL` and
+`REX_MACOS_ARM64_URL`) and the matching workflow checksums. Secrets keep the
+URLs out of source and mask them in logs; they do not make a public download
+endpoint access-controlled.
+
 **Any contribution that changes logic must include a corresponding automated
 test.** This applies to shell scripts, shell integrations, installer/removal
 behavior, and Lua recovery code alike. Bug fixes need a regression test.

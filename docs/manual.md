@@ -232,11 +232,16 @@ session state.
 - Recovery targets the original session/block on the same host. Unlisted,
   missing, remote, busy, or completed terminals are skipped.
 - Commands are only typed into recognized shells, without an unrelated
-  reported ancestor. The foreground process is checked again immediately
+  reported ancestor. Recovery waits through Rex's root bootstrap and login
+  processes until the shell is ready; real commands inside a shell remain busy.
+  The foreground process is checked again immediately
   before typing. This is not an atomic idle guarantee: shell builtins,
   unsubmitted input, and last-moment process changes remain possible.
 - Checkpoints are validated and atomically renamed into place. Failed saves
-  prevent relaunches; corrupt checkpoints are left untouched. Atomic rename
+  prevent relaunches; corrupt checkpoints are left untouched. A scan only
+  replaces the checkpoint if the same server still responds after local
+  process checks, so a disconnect cannot turn a partial scan into completed
+  commands. Atomic rename
   is not an `fsync` guarantee against power loss.
 - A kernel lock prevents watchers from sharing a checkpoint. A leftover empty
   lock file does not imply a live lock.
@@ -270,9 +275,9 @@ paths.
 
 Installer tests use temporary homes and fake service commands for both macOS
 and Linux, never real service installation. Socket and process-ID checks guard
-the private server before stop or kill operations. The suite has been run on
-macOS; Linux service generation is fixture-tested, not verified against a real
-Linux service manager.
+the private server before stop or kill operations. CI runs the full suite on
+macOS 15, Ubuntu 24.04, and Ubuntu 26.04. Linux service generation remains
+fixture-tested, not verified against a real Linux service manager.
 
 ## Rex references
 
