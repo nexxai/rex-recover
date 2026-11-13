@@ -295,6 +295,7 @@ function M.new(api, options)
           apps[key] = record
           launches[#launches + 1] = record
         else
+          api.log("warn", "[DEBUG-ci-startup] " .. api.json.encode(observation.processes))
           api.log("warn", "Not restoring " .. record.app .. ": terminal " .. key .. " is busy")
         end
       end

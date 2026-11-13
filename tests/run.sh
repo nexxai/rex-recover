@@ -63,6 +63,14 @@ stop_server() {
 # Failed tests must not leave their own watcher or server running. Cleanup gets
 # no broader stop permission than the test itself; artifacts stay for diagnosis.
 cleanup() {
+  test_status=$?
+  if [ "$test_status" -ne 0 ]; then
+    # Hosted runners disappear after failure. Retain the private fixture's
+    # watcher decisions and checkpoint in the log before that evidence is lost.
+    echo "Failure diagnostics: private watcher"
+    if [ -f "$temporary/watcher.log" ]; then cat "$temporary/watcher.log"; fi
+    if [ -f "$temporary/watcher/checkpoint.json" ]; then cat "$temporary/watcher/checkpoint.json"; fi
+  fi
   if [ -n "$watcher_pid" ]; then
     kill "$watcher_pid" 2>/dev/null || :
     wait "$watcher_pid" 2>/dev/null || :
