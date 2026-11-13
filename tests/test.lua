@@ -294,6 +294,59 @@ test("unknown process metadata preserves a live checkpoint and delays recovery u
   equal(#f.writes, 1)
 end)
 
+test("restored terminal bootstrap stages preserve recovery until the shell is ready", function()
+  local f = fixture()
+  local m = monitor(f)
+  assert(m:tick())
+  restarted(f)
+  f.processes["block:worker"] = {
+    child = { pid = 8001, name = "rex" },
+    foreground = { pid = 8001, name = "rex" },
+  }
+  assert(m:tick())
+  equal(f.writes, {})
+  equal(checkpoint(f).pending["block:worker"], command())
+  assert(monitor(f):tick())
+  equal(f.writes, {})
+  f.processes["block:worker"] = {
+    child = { pid = 8001, name = "login" },
+    foreground = { pid = 8001, name = "login" },
+  }
+  assert(monitor(f):tick())
+  equal(f.writes, {})
+  equal(checkpoint(f).pending["block:worker"], command())
+  f.processes["block:worker"] = {
+    child = { pid = 8001, name = "login" },
+    foreground = { pid = 8002, name = "zsh" },
+    ancestors = { { pid = 8001, name = "login" } },
+  }
+  assert(monitor(f):tick())
+  equal(#f.writes, 1)
+  equal(f.writes[1].block_id, "block:worker")
+  assert(monitor(f):tick())
+  equal(#f.writes, 1)
+end)
+
+test("Rex and login commands inside a shell remain busy rather than deferred", function()
+  for _, name in ipairs({ "rex", "login" }) do
+    local f = fixture()
+    local m = monitor(f)
+    assert(m:tick())
+    restarted(f)
+    f.processes["block:worker"] = {
+      child = { pid = 8001, name = "zsh" },
+      foreground = { pid = 8002, name = name },
+      ancestors = { { pid = 8001, name = "zsh" } },
+    }
+    assert(m:tick())
+    equal(f.writes, {})
+    equal(checkpoint(f).pending, {})
+    f.processes["block:worker"] = { foreground = { pid = 8001, name = "zsh" } }
+    assert(m:tick())
+    equal(f.writes, {})
+  end
+end)
+
 test("busy, missing, remote, completed, and nested-program terminals are skipped", function()
   for _, scenario in ipairs({ "busy", "missing", "remote", "completed", "nested" }) do
     local f = fixture()

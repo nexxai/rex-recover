@@ -232,7 +232,9 @@ session state.
 - Recovery targets the original session/block on the same host. Unlisted,
   missing, remote, busy, or completed terminals are skipped.
 - Commands are only typed into recognized shells, without an unrelated
-  reported ancestor. The foreground process is checked again immediately
+  reported ancestor. Recovery waits through Rex's root bootstrap and login
+  processes until the shell is ready; real commands inside a shell remain busy.
+  The foreground process is checked again immediately
   before typing. This is not an atomic idle guarantee: shell builtins,
   unsubmitted input, and last-moment process changes remain possible.
 - Checkpoints are validated and atomically renamed into place. Failed saves
