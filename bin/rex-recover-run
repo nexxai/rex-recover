@@ -1,0 +1,50 @@
+#!/bin/sh
+set -eu
+
+if [ "$#" -eq 0 ]; then
+  echo "Usage: rex-recover-run COMMAND [ARGUMENTS...]" >&2
+  exit 2
+fi
+requested=$1
+shift
+executable=$(command -v "$requested" 2>/dev/null || :)
+if [ ! -f "$executable" ] || [ ! -x "$executable" ]; then
+  echo "Command not found: $requested" >&2
+  exit 127
+fi
+owner_pid=$$
+
+record_launch() (
+  # Keep private recording permissions out of the application's environment.
+  umask 077
+  case "$REX_SESSION" in session:*) ;; *) return 1 ;; esac
+  case "$REX_BLOCK" in block:*) ;; *) return 1 ;; esac
+  case "$REX_SESSION$REX_BLOCK" in *[!a-zA-Z0-9:-]*) return 1 ;; esac
+  app=${requested##*/}
+  directory=$(pwd -P) || return 1
+  for value in "$app" "$directory" "$executable" "$@"; do
+    cleaned=$(printf '%s' "$value" | LC_ALL=C tr -d '\000-\037\177') || return 1
+    [ "$cleaned" = "$value" ] || return 1
+  done
+  started_at=$(LC_ALL=C ps -p "$owner_pid" -o lstart= | sed 's/^ *//;s/ *$//')
+  [ -n "$started_at" ] || return 1
+  state_dir=${REX_RECOVER_STATE_DIR:-${XDG_STATE_HOME:-"$HOME/.local/state"}/rex-recover}
+  launch_dir=${REX_RECOVER_LAUNCH_DIR:-"$state_dir/launches"}
+  case "$launch_dir" in /*) ;; *) return 1 ;; esac
+  mkdir -p -- "$launch_dir" || return 1
+  temporary=$(mktemp "$launch_dir/.launch.XXXXXX") || return 1
+  trap 'rm -f -- "$temporary"' EXIT
+  printf '%s\000' rex-recover-launch-v1 "$REX_SESSION" "$REX_BLOCK" \
+    "$owner_pid" "$started_at" "$app" "$directory" "$executable" "$@" \
+    >"$temporary" || return 1
+  mv -f -- "$temporary" "$launch_dir/$REX_BLOCK"
+)
+
+if [ -n "${REX_SESSION:-}" ] && [ -n "${REX_BLOCK:-}" ]; then
+  if ! record_launch "$@"; then
+    echo "Rex Recover: could not record $requested; running it without argument recovery." >&2
+  fi
+fi
+
+# Preserve the process ID, terminal, exit status, and signal behavior.
+exec "$executable" "$@"

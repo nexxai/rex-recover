@@ -1,0 +1,30 @@
+#!/bin/sh
+set -eu
+
+if [ "$#" -ne 1 ]; then
+  echo "Usage: rex-recover-config FILE" >&2
+  exit 2
+fi
+file=$1
+case "$file" in /*) ;; *) file="$PWD/$file" ;; esac
+if [ ! -f "$file" ] || [ ! -r "$file" ]; then
+  echo "Rex Recover: config not readable: $file. Create apps.conf or select one with --config / REX_RECOVER_CONFIG." >&2
+  exit 2
+fi
+
+LC_ALL=C awk '
+  function fail(message) {
+    print FILENAME ":" FNR ": " message > "/dev/stderr"
+    exit 2
+  }
+  {
+    sub(/\r$/, "")
+    sub(/#.*/, "")
+    if (NF == 0) next
+    if (NF != 1) fail("expected one executable name per line, with no modifiers")
+    if ($1 !~ /^[a-zA-Z0-9_][a-zA-Z0-9_.+-]*$/)
+      fail("expected a bare executable name")
+    if (seen[$1]++) fail("duplicate command: " $1)
+    printf "%s\n", $1
+  }
+' "$file"

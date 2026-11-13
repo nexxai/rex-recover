@@ -1,0 +1,95 @@
+#!/bin/sh
+set -eu
+umask 077
+
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+rex_bin=${REX_BIN:-}
+state_dir=${REX_RECOVER_STATE_DIR:-${XDG_STATE_HOME:-"$HOME/.local/state"}/rex-recover}
+server=
+config=${REX_RECOVER_CONFIG:-${XDG_CONFIG_HOME:-"$HOME/.config"}/rex-recover/apps.conf}
+interval=2
+
+usage() {
+  echo "Usage: rex-recover [--rex PATH] [--state-dir DIR] [--server unix://PATH] [--config FILE] [--interval SECONDS]"
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --help|-h) usage; exit 0 ;;
+    --rex|--state-dir|--server|--config|--interval)
+      [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+      case "$1" in
+        --rex) rex_bin=$2 ;;
+        --state-dir) state_dir=$2 ;;
+        --server) server=$2 ;;
+        --config) config=$2 ;;
+        --interval) interval=$2 ;;
+      esac
+      shift 2
+      ;;
+    *) usage >&2; exit 2 ;;
+  esac
+done
+
+case "$server" in
+  ""|unix://*) ;;
+  *) echo "Only local Unix-socket servers are supported." >&2; exit 2 ;;
+esac
+
+if [ -z "$rex_bin" ]; then
+  rex_bin=$(command -v rex 2>/dev/null || :)
+  if [ -z "$rex_bin" ] && [ "$(uname -s)" = Darwin ]; then
+    bundled="$HOME/Library/Application Support/com.superlogical.rex/RexServer/Versions/Current/Rex Server.app/Contents/MacOS/rex"
+    if [ -f "$bundled" ] && [ -x "$bundled" ]; then rex_bin=$bundled; fi
+  fi
+fi
+resolved_rex=$(command -v "${rex_bin:-rex}" 2>/dev/null || :)
+if [ ! -f "$resolved_rex" ] || [ ! -x "$resolved_rex" ]; then
+  echo "Rex CLI not found: ${rex_bin:-rex}. Pass --rex /absolute/path/to/rex or set REX_BIN." >&2
+  exit 127
+fi
+rex_bin=$resolved_rex
+
+if ! "$root/bin/rex-recover-config" "$config" >/dev/null; then exit 2; fi
+
+mkdir -p -- "$state_dir"
+state_dir=$(CDPATH= cd -- "$state_dir" && pwd)
+exec 9>"$state_dir/watcher.lock"
+if command -v lockf >/dev/null 2>&1; then
+  lockf -s -t 0 9 || { echo "Another watcher holds $state_dir" >&2; exit 1; }
+elif command -v flock >/dev/null 2>&1; then
+  flock -n 9 || { echo "Another watcher holds $state_dir" >&2; exit 1; }
+else
+  echo "A native file-lock utility (lockf or flock) is required." >&2
+  exit 1
+fi
+child=
+
+cleanup() {
+  if [ -n "$child" ]; then
+    kill "$child" 2>/dev/null || :
+    wait "$child" 2>/dev/null || :
+  fi
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+
+set -- "$rex_bin" --autostart=false
+if [ -n "$server" ]; then set -- "$@" --server "$server"; fi
+set -- "$@" do "$root/watch.lua" --all --fail-fast \
+  "state_path=$state_dir/checkpoint.json" "interval=$interval" \
+  "launcher=$root/bin/rex-recover-run" "config=$config" \
+  "config_reader=$root/bin/rex-recover-config"
+
+while :; do
+  "$@" &
+  child=$!
+  wait "$child" || :
+  child=
+  sleep 1 &
+  child=$!
+  wait "$child" || :
+  child=
+done
