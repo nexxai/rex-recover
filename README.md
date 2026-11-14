@@ -3,6 +3,14 @@
 Get back to work after a Rex server restart without rebuilding your terminal
 workflow by hand.
 
+## See it in action
+
+Watch Rex Recover relaunch monitored commands after a Rex server restart.
+
+https://github.com/user-attachments/assets/07f4cd47-7347-466f-a9b6-72ec8cec1763
+
+[Download the recording](assets/screen-recording.mp4).
+
 ## Why it exists
 
 Rex can bring back your sessions and terminal layout, but the commands you were
