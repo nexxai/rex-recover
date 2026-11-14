@@ -34,6 +34,26 @@ SH
   chmod +x "$1"
 }
 
+# Identifying a checkout must not require working recovery settings or contact
+# Rex. A fresh home and separate state path expose accidental watcher startup.
+mkdir "$temporary/version-home"
+make_rex "$temporary/version-rex"
+if ! env -u XDG_CONFIG_HOME -u XDG_STATE_HOME HOME="$temporary/version-home" PATH="/usr/bin:/bin" \
+  REX_BIN="$temporary/version-rex" REX_RECOVER_CONFIG="$temporary/missing.conf" \
+  REX_RECOVER_STATE_DIR="$temporary/version-state" REX_TEST_CALL_LOG="$temporary/version-call.log" \
+  /bin/sh "$root/bin/rex-recover" --version >"$temporary/version.out" 2>"$temporary/version.err"; then
+  echo "FAIL: --version must succeed without recovery configuration" >&2
+  cat "$temporary/version.err" >&2
+  exit 1
+fi
+printf 'rex-recover 0.1.0\n' >"$temporary/expected-version"
+cmp "$temporary/expected-version" "$temporary/version.out"
+[ ! -s "$temporary/version.err" ]
+[ ! -e "$temporary/version-call.log" ]
+[ ! -e "$temporary/version-state" ]
+[ -z "$(ls -A "$temporary/version-home")" ]
+echo "ok - --version identifies the checkout without calling Rex or creating recovery state"
+
 # A restricted PATH proves discovery does not accidentally pass because the
 # developer already installed rex. Bounded waiting tolerates process startup
 # without allowing a broken supervisor to hang the suite indefinitely.
