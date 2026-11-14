@@ -46,7 +46,8 @@ The watcher never starts Rex for you. It waits until you bring Rex back.
 Requires Rex, macOS or Linux, and zsh or bash for automatic launch capture.
 See the [manual](docs/manual.md) for prerequisites and other-shell options.
 
-From this checkout, in a terminal **outside Rex**, run:
+Download and extract a [release](https://github.com/nexxai/rex-recover/releases),
+or use this checkout. In a terminal **outside Rex**, run:
 
 ```sh
 sh install.sh
@@ -63,6 +64,10 @@ As your tools change, `rex-recover apps` keeps recovery limited to the commands
 you still want to bring back, without rebuilding the list. Apply changes with
 `rex-recover service restart`; your current Rex sessions keep running.
 See the [manual](docs/manual.md#configure) for the menu and capture-refresh steps.
+
+Check the installed version with `rex-recover --version`. To upgrade, rerun
+`sh install.sh` from the new release; restarting the watcher alone does not
+update its installed code.
 
 **Only monitor commands you are comfortable running again.** Recorded arguments
 may contain secrets. The [manual](docs/manual.md) explains storage, capture

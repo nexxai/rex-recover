@@ -9,8 +9,9 @@ scope before you invest time in an implementation.
 
 ## Reporting a problem
 
-Include your operating system, shell, Rex version, what you expected, what
-happened, and the smallest steps that reproduce it. Sanitized logs can help.
+Include your operating system, shell, Rex version, Rex Recover version
+(`rex-recover --version`), what you expected, what happened, and the smallest
+steps that reproduce it. Sanitized logs can help.
 Do not share real recovery state or command arguments containing secrets.
 
 ## Making a change

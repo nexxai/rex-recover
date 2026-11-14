@@ -183,6 +183,10 @@ check the service logs if monitoring does not resume.
 To upgrade an installed runtime, rerun the installer from the updated checkout;
 restarting alone does not copy new code into the installation.
 
+Check the installed version with `rex-recover --version`, or identify an
+uninstalled checkout with `sh bin/rex-recover --version`. These commands do not
+require a running Rex server or recovery configuration.
+
 ### Try a recovery
 
 Use a disposable command you are comfortable relaunching. Enable capture in a

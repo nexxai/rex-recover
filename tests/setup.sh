@@ -130,6 +130,21 @@ y
     -- "$startup"
   echo "ok - $platform installer creates a configured runtime, shell hook, and user service"
 
+  # The installed copy has no Git metadata. Its version must still be available
+  # without valid settings, a Rex connection, or service-manager operations.
+  cp "$environment/services" "$environment/services-before-version"
+  env TEST_PLATFORM="$platform" TEST_ENV="$environment" HOME="$home" \
+    REX_RECOVER_CONFIG="$environment/missing.conf" REX_RECOVER_STATE_DIR="$environment/version-state" \
+    PATH="$environment/bin:$PATH" "$home/.local/bin/rex-recover" --version \
+    >"$environment/version.out" 2>"$environment/version.err"
+  printf 'rex-recover 0.1.0\n' >"$environment/expected-version"
+  cmp "$environment/expected-version" "$environment/version.out"
+  [ ! -s "$environment/version.err" ]
+  [ ! -f "$environment/rex-calls" ]
+  [ ! -e "$environment/version-state" ]
+  cmp "$environment/services-before-version" "$environment/services"
+  echo "ok - $platform installed --version works without calling Rex or changing recovery state or services"
+
   # Run the installed launcher, not just the checkout, to catch omitted runtime
   # helpers. Assert the complete service log so no Rex/system-wide restart slips in.
   : >"$environment/services"

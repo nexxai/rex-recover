@@ -22,6 +22,7 @@ usage() {
   echo "Usage: rex-recover [--rex PATH] [--state-dir DIR] [--server unix://PATH] [--config FILE] [--interval SECONDS]"
   echo "       rex-recover apps [--config FILE]"
   echo "       rex-recover service restart"
+  echo "       rex-recover --version"
 }
 
 # Paths can contain spaces or shell syntax. Parsing option/value pairs as
@@ -29,6 +30,7 @@ usage() {
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --help|-h) usage; exit 0 ;;
+    --version) echo "rex-recover 0.1.0"; exit 0 ;;
     apps)
       [ "$action" = watch ] || { usage >&2; exit 2; }
       action=apps
