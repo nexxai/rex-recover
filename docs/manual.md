@@ -47,6 +47,33 @@ functions.
 
 ## Configure
 
+For an installed setup, run:
+
+```sh
+rex-recover apps
+```
+
+The menu shows the current list with numbers. Choose **a** to add executable
+names separated by spaces or commas, or **r** to remove one or more displayed
+numbers. Existing names do not need to be retyped; adding an already monitored
+name leaves it alone. Choose **s** to save or **q** to cancel. Nothing is written
+until Save, and closed input cancels without saving.
+
+Comments and unselected entries are preserved, changed files are backed up,
+and config symlinks remain intact. Invalid input leaves the staged list unchanged.
+If the file changes outside the menu before saving, Save refuses to overwrite
+that edit; reopen the menu to work from the updated list.
+
+Use `rex-recover apps --config /absolute/path/apps.conf` to edit another list.
+From an uninstalled checkout, use `sh bin/rex-recover apps` instead. The config
+must already exist and be valid. To get these commands in an older installation,
+rerun `sh install.sh` from the updated checkout and approve service setup.
+
+After saving, restart the watcher and refresh capture as described below.
+The menu does not automatically restart services or change your current shell.
+
+### Plain-text configuration
+
 Create a plain-text file at:
 
 ```text
@@ -85,9 +112,11 @@ Both the watcher and shell integration use **the same parser and file**:
 - `REX_RECOVER_CONFIG=/absolute/path/apps.conf` selects another file for both.
 - The watcher's `--config /absolute/path/apps.conf` overrides that environment
   variable. Set `REX_RECOVER_CONFIG` to the same path in your Rex shells.
-- After editing the list, restart the watcher and re-source the shell
-  integration. Re-sourcing removes obsolete wrappers without overwriting
-  user-defined or user-modified functions.
+- After editing the list, run `rex-recover service restart` for an installed
+  watcher service. For a foreground watcher, stop it with Ctrl-C and start it
+  again. Open new Rex terminals or re-source the shell integration.
+  Re-sourcing removes obsolete wrappers without overwriting user-defined or
+  user-modified functions. Launch newly monitored commands once to record them.
 
 Missing or invalid config is reported with the file and, for invalid entries,
 the line number. Invalid shell config leaves the existing wrappers unchanged.
@@ -132,6 +161,46 @@ sh bin/rex-recover \
 
 The watcher **never starts Rex**. It waits while Rex is stopped and reconnects
 when Rex returns. Ctrl-C stops the watcher, not Rex or its applications.
+
+### Restart the watcher service
+
+```sh
+rex-recover service restart
+```
+
+This operates only on your user watcher service: `local.rex-recover` in the
+macOS GUI user domain, or `rex-recover.service` in Linux's systemd user manager.
+It does not restart Rex, relaunch apps, or change login-start settings. It can
+also start an installed service that is currently stopped.
+
+On macOS the job is unloaded and bootstrapped again, rather than force-killing
+only its supervisor and potentially leaving a worker holding the watcher lock.
+On Linux it uses `systemctl --user restart rex-recover.service`. A missing
+service installation or service-manager error is reported as a failure.
+Successful output confirms the restart request, not ongoing watcher health;
+check the service logs if monitoring does not resume.
+
+To upgrade an installed runtime, rerun the installer from the updated checkout;
+restarting alone does not copy new code into the installation.
+
+### Try a recovery
+
+Use a disposable command you are comfortable relaunching. Enable capture in a
+new Rex terminal and launch that monitored command once so its details are
+recorded. Leave it running long enough for the watcher to observe it.
+
+From a terminal **outside Rex**, stop the server:
+
+```sh
+rex --autostart=false server stop
+```
+
+**This ends every program running in the server's sessions**, not just the
+monitored command. Save your work first. Do not add `--discard`: recovery needs
+Rex's saved sessions and terminal IDs.
+
+Start Rex again as usual. The watcher waits for you to do this, then restores
+the last observed monitored commands in their original terminals.
 
 ### Start at login on macOS
 
@@ -265,7 +334,8 @@ Tests use invented executable names and harmless local stand-ins, never real
 projects or application services. They cover shared config parsing, dynamic
 shell wrappers, exact argument bytes, zero-argument launches, original launch
 folders, process identity, completed commands, storage failures, safe targeting,
-and duplicate prevention.
+and duplicate prevention. Menu tests cover incremental additions, numbered
+removals, validation, cancellation, backups, symlinks, and conflicting edits.
 
 End-to-end tests run a **separate Rex server and socket** and exercise repeated
 graceful shutdowns, `SIGKILL`, watcher/supervisor restarts, and original panes
@@ -273,11 +343,12 @@ and launch folders after the fixture apps change directory. Your live server
 is left alone. The suite requires zsh and retains test artifacts at the printed
 paths.
 
-Installer tests use temporary homes and fake service commands for both macOS
-and Linux, never real service installation. Socket and process-ID checks guard
-the private server before stop or kill operations. CI runs the full suite on
-macOS 15, Ubuntu 24.04, and Ubuntu 26.04. Linux service generation remains
-fixture-tested, not verified against a real Linux service manager.
+Installer and service-restart tests use temporary homes and fake service
+commands for both macOS and Linux, never real service installation. Socket and
+process-ID checks guard the private server before stop or kill operations. CI
+runs the full suite on macOS 15, Ubuntu 24.04, and Ubuntu 26.04. Linux service
+generation remains fixture-tested, not verified against a real Linux service
+manager.
 
 ## Rex references
 
