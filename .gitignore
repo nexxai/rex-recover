@@ -1,0 +1,23 @@
+# Operating system metadata
+.DS_Store
+._*
+Thumbs.db
+Desktop.ini
+
+# Editor settings and temporary files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Local environment files (keep shareable templates)
+.env
+.env.*
+!.env.example
+!.env.sample
+
+# Logs, caches, and browser-tool artifacts
+*.log
+.cache/
+.playwright-mcp/
