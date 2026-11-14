@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<link rel="icon" href="data:,">
+<title>Rex Recover header source</title>
+<style>
+    @font-face {
+        font-family: 'Host Grotesk';
+        src: url('./HostGrotesk-ExtraBold.ttf') format('truetype');
+        font-style: normal;
+        font-weight: 800;
+    }
+    html, body { margin: 0; background: #0c0913; }
+    canvas { display: block; width: 100%; height: auto; }
+</style>
+<canvas id="artwork" role="img" aria-label="Rex Recover repository header"></canvas>
+<script type="module">
+    async function renderHeader() {
+        const title = 'Rex Recover';
+        const font = '800 190px "Host Grotesk"';
+        const image = new Image();
+        image.src = './original.png';
+        await image.decode();
+        const canvas = document.querySelector('#artwork');
+        canvas.width = image.naturalWidth;
+        canvas.height = image.naturalHeight;
+        const context = canvas.getContext('2d', { willReadFrequently: true });
+        context.drawImage(image, 0, 0);
+
+        // The generated source has its original lettering baked in. Replacing
+        // only that region preserves the approved icon and surrounding texture.
+        // Samples above/below it keep the replacement background the same color.
+        const pixels = context.getImageData(0, 0, canvas.width, canvas.height);
+        const original = new Uint8ClampedArray(pixels.data);
+        const top = 250;
+        const bottom = 430;
+        for (let y = top; y <= bottom; y++) {
+            const blend = (y - top) / (bottom - top);
+            for (let x = 195; x < 1380; x++) {
+                const offset = (y * canvas.width + x) * 4;
+                const above = (top * canvas.width + x) * 4;
+                const below = (bottom * canvas.width + x) * 4;
+                for (let channel = 0; channel < 3; channel++) {
+                    pixels.data[offset + channel] =
+                        original[above + channel] * (1 - blend) + original[below + channel] * blend;
+                }
+            }
+        }
+        context.putImageData(pixels, 0, 0);
+
+        // Use the real font rather than an image model's approximation. Keep
+        // the approved visible left edge and vertical center without stretching
+        // the new glyphs to match the proportions of the old typeface.
+        await document.fonts.load(font);
+        context.font = font;
+        context.fillStyle = '#fafafa';
+        const metrics = context.measureText(title);
+        context.fillText(
+            title,
+            213 + metrics.actualBoundingBoxLeft,
+            (271 + 407 + metrics.actualBoundingBoxAscent - metrics.actualBoundingBoxDescent) / 2,
+        );
+    }
+
+    // Capture tools can await this promise instead of guessing a font-load delay.
+    window.headerReady = renderHeader();
+</script>
+</html>

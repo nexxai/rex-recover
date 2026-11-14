@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<link rel="icon" href="data:,">
+<title>Rex Recover social preview source</title>
+<style>
+    @font-face {
+        font-family: 'Host Grotesk';
+        src: url('./HostGrotesk-ExtraBold.ttf') format('truetype');
+        font-style: normal;
+        font-weight: 800;
+    }
+    @font-face {
+        font-family: 'Host Grotesk';
+        src: url('./HostGrotesk-Medium.ttf') format('truetype');
+        font-style: normal;
+        font-weight: 500;
+    }
+    html, body { margin: 0; background: #0d0815; }
+    #artwork {
+        /* The supplied GitHub template's guides sit about 80px from its edges.
+           Keep that generous inset rather than relying on a platform's crop. */
+        --safe-inset: 80px;
+        box-sizing: border-box;
+        width: 1280px;
+        height: 640px;
+        padding: var(--safe-inset);
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 360px;
+        gap: 40px;
+        align-items: center;
+        color: #fafafa;
+        background: #0d0815;
+        font-family: 'Host Grotesk', sans-serif;
+        overflow: hidden;
+    }
+    h1 {
+        margin: 0;
+        font-size: 110px;
+        font-weight: 800;
+        line-height: 1.1;
+        white-space: nowrap;
+    }
+    p {
+        margin: 24px 0 0;
+        color: #d8d4df;
+        font-size: 30px;
+        font-weight: 500;
+        line-height: 1.4;
+    }
+    #logo {
+        width: 360px;
+        height: 380px;
+        overflow: hidden;
+    }
+    svg { display: block; overflow: hidden; }
+</style>
+<main id="artwork" aria-label="Rex Recover social preview">
+    <div>
+        <h1 id="social-title">Rex Recover</h1>
+        <p id="tagline">
+            Get back to work after a Rex server restart<br>
+            without rebuilding your terminal workflow by hand.
+        </p>
+    </div>
+    <!-- Crop the approved raster artwork rather than regenerating the logo,
+         which would introduce a second, subtly different brand mark. -->
+    <div id="logo" aria-hidden="true">
+        <svg width="360" height="380" viewBox="1540 105 490 480" xmlns="http://www.w3.org/2000/svg">
+            <image href="./original.png" width="2243" height="701" />
+        </svg>
+    </div>
+</main>
+</html>
