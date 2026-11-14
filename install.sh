@@ -61,6 +61,7 @@ echo "  Rex CLI:  $rex_bin"
 echo "Examples of app names: opencode, npm, nvim. These are examples, not defaults."
 echo "Configured commands can be rerun after a crash; their arguments may contain secrets."
 echo "Enter executable names only, not full commands or arguments."
+echo "After installation, use 'rex-recover apps' to add/remove entries without retyping the list."
 existing=
 if [ -e "$config" ] && [ ! -f "$config" ]; then die "Config is not a regular file: $config"; fi
 # A blank response should preserve a valid existing config, including comments.
@@ -297,4 +298,6 @@ fi
 # launch metadata; explain the one-time restart of those commands explicitly.
 echo "Installed. Open new terminals to activate capture; relaunch newly monitored commands once."
 echo "Start manually: $command_dir/rex-recover"
+echo "Manage apps:    $command_dir/rex-recover apps"
+if [ -n "$service_file" ]; then echo "Restart watcher: $command_dir/rex-recover service restart"; fi
 echo "Uninstall:      $command_dir/rex-recover-uninstall"

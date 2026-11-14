@@ -8,6 +8,7 @@ umask 077
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 rex_bin=${REX_BIN:-rex}
 sh "$root/tests/config.sh"
+sh "$root/tests/management.sh"
 sh "$root/tests/launcher.sh"
 sh "$root/tests/commands.sh"
 sh "$root/tests/bash.sh"

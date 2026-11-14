@@ -195,6 +195,6 @@ previous_owned() {
 # One explicit allowlist serves both copying and removal. A recursive directory
 # cleanup could destroy unrelated notes, backups, or user-added integrations.
 # These relative names intentionally contain no spaces; the roots still can.
-runtime_files='install.sh uninstall.sh scripts/setup.sh recovery.lua watch.lua
+runtime_files='install.sh uninstall.sh scripts/setup.sh scripts/apps.sh recovery.lua watch.lua
 bin/rex-recover bin/rex-recover-config bin/rex-recover-run
 shell/rex-recover.zsh shell/rex-recover.bash'

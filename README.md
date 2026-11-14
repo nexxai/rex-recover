@@ -9,8 +9,6 @@ Watch Rex Recover relaunch monitored commands after a Rex server restart.
 
 https://github.com/user-attachments/assets/07f4cd47-7347-466f-a9b6-72ec8cec1763
 
-[Download the recording](assets/screen-recording.mp4).
-
 ## Why it exists
 
 Rex can bring back your sessions and terminal layout, but the commands you were
@@ -61,9 +59,10 @@ applying them. No `sudo` is needed; changed files are backed up.
 Stop any manually running watcher first. After installation, open new terminals
 and launch your chosen commands once so their launch details can be recorded.
 
-To change the monitored commands, rerun the installer. The app list is a plain
-text file, normally `~/.config/rex-recover/apps.conf`, with one executable name
-per line.
+As your tools change, `rex-recover apps` keeps recovery limited to the commands
+you still want to bring back, without rebuilding the list. Apply changes with
+`rex-recover service restart`; your current Rex sessions keep running.
+See the [manual](docs/manual.md#configure) for the menu and capture-refresh steps.
 
 **Only monitor commands you are comfortable running again.** Recorded arguments
 may contain secrets. The [manual](docs/manual.md) explains storage, capture

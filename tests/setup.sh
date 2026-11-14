@@ -31,7 +31,10 @@ case "${0##*/}" in
     case "$1:$2" in
       print:gui/501) exit 0 ;;
       print:gui/501/local.rex-recover) test -f "$TEST_ENV/active" ;;
-      bootstrap:*) : >"$TEST_ENV/active" ;;
+      bootstrap:*)
+        if [ -f "$TEST_ENV/fail-restart" ]; then echo "fixture restart failed" >&2; exit 1; fi
+        : >"$TEST_ENV/active"
+        ;;
       bootout:*) rm -f "$TEST_ENV/active" ;;
       *) exit 1 ;;
     esac
@@ -42,6 +45,10 @@ case "${0##*/}" in
       "--user show-environment") exit 0 ;;
       "--user is-active --quiet rex-recover.service") test -f "$TEST_ENV/active" ;;
       "--user enable --now rex-recover.service") : >"$TEST_ENV/active" ;;
+      "--user restart rex-recover.service")
+        if [ -f "$TEST_ENV/fail-restart" ]; then echo "fixture restart failed" >&2; exit 1; fi
+        : >"$TEST_ENV/active"
+        ;;
       "--user disable --now rex-recover.service") rm -f "$TEST_ENV/active" ;;
       "--user daemon-reload") exit 0 ;;
       *) exit 1 ;;
@@ -97,6 +104,8 @@ y
   [ -f "$service" ]
   [ -f "$environment/active" ]
   [ ! -f "$environment/rex-calls" ]
+  grep -Fq "Manage apps:    $home/.local/bin/rex-recover apps" "$environment/install.log"
+  grep -Fq "Restart watcher: $home/.local/bin/rex-recover service restart" "$environment/install.log"
   printf 'sample-worker\nsample-editor\n' >"$environment/expected-apps"
   cmp "$environment/expected-apps" "$home/.config/rex-recover/apps.conf"
   [ "$(grep -c '^# >>> Rex Recover >>>$' "$startup")" = 1 ]
@@ -120,6 +129,58 @@ y
     "$shell" -c '. "$1"; type sample-worker >/dev/null; test "$KEEP_USER_SETTING" = 1' \
     -- "$startup"
   echo "ok - $platform installer creates a configured runtime, shell hook, and user service"
+
+  # Run the installed launcher, not just the checkout, to catch omitted runtime
+  # helpers. Assert the complete service log so no Rex/system-wide restart slips in.
+  : >"$environment/services"
+  env -u REX_RECOVER_CONFIG -u REX_RECOVER_STATE_DIR \
+    TEST_PLATFORM="$platform" TEST_ENV="$environment" HOME="$home" XDG_CONFIG_HOME="$home/.config" \
+    PATH="$environment/bin:$PATH" "$home/.local/bin/rex-recover" service restart \
+    >"$environment/restart.log" 2>&1
+  if [ "$platform" = Darwin ]; then
+    printf 'launchctl print gui/501/local.rex-recover\nlaunchctl bootout gui/501/local.rex-recover\nlaunchctl bootstrap gui/501 %s\n' \
+      "$service" >"$environment/expected-services"
+  else
+    printf 'systemctl --user restart rex-recover.service\n' >"$environment/expected-services"
+  fi
+  cmp "$environment/expected-services" "$environment/services"
+  [ -f "$environment/active" ]
+  [ ! -f "$environment/rex-calls" ]
+  echo "ok - $platform service restart targets only the installed user watcher"
+
+  rm "$environment/active"
+  : >"$environment/services"
+  env TEST_PLATFORM="$platform" TEST_ENV="$environment" HOME="$home" XDG_CONFIG_HOME="$home/.config" \
+    PATH="$environment/bin:$PATH" "$home/.local/bin/rex-recover" service restart \
+    >"$environment/restart-stopped.log" 2>&1
+  if [ "$platform" = Darwin ]; then
+    printf 'launchctl print gui/501/local.rex-recover\nlaunchctl bootstrap gui/501 %s\n' \
+      "$service" >"$environment/expected-services"
+  fi
+  cmp "$environment/expected-services" "$environment/services"
+  [ -f "$environment/active" ]
+  echo "ok - $platform restart also starts a stopped watcher service"
+
+  : >"$environment/fail-restart"
+  if env TEST_PLATFORM="$platform" TEST_ENV="$environment" HOME="$home" XDG_CONFIG_HOME="$home/.config" \
+    PATH="$environment/bin:$PATH" "$home/.local/bin/rex-recover" service restart \
+    >"$environment/restart-failed.log" 2>&1; then
+    echo "FAIL: service-manager failure was reported as success" >&2
+    exit 1
+  fi
+  grep -q 'fixture restart failed' "$environment/restart-failed.log"
+  ! grep -q 'restart requested' "$environment/restart-failed.log"
+  rm "$environment/fail-restart"
+  echo "ok - $platform restart reports service-manager failures"
+
+  printf 'a\nsample-viewer\ns\n' |
+    env -u REX_RECOVER_CONFIG TEST_PLATFORM="$platform" TEST_ENV="$environment" HOME="$home" \
+      XDG_CONFIG_HOME="$home/.config" PATH="$environment/bin:$PATH" \
+      "$home/.local/bin/rex-recover" apps >"$environment/apps.log" 2>&1
+  printf 'sample-worker\nsample-editor\nsample-viewer\n' >"$environment/expected-apps"
+  cmp "$environment/expected-apps" "$home/.config/rex-recover/apps.conf"
+  [ ! -f "$environment/rex-calls" ]
+  echo "ok - $platform installed app menu updates the installer's config"
 
   # Reinstallation is a normal update path, not permission to append another
   # copy of the managed block or erase settings added since the first install.
@@ -168,7 +229,18 @@ y
 '
 [ ! -s "$home/.config/rex-recover/apps.conf" ]
 [ ! -f "$home/.config/systemd/user/rex-recover.service" ]
+! grep -q '^Restart watcher:' "$environment/install.log"
 ! grep -q 'Rex Recover' "$startup"
+: >"$environment/services"
+if env TEST_PLATFORM="$platform" TEST_ENV="$environment" HOME="$home" XDG_CONFIG_HOME="$home/.config" \
+  PATH="$environment/bin:$PATH" "$home/.local/bin/rex-recover" service restart \
+  >"$environment/no-service.log" 2>&1; then
+  echo "FAIL: restart accepted a missing service installation" >&2
+  exit 1
+fi
+grep -q 'service not installed' "$environment/no-service.log"
+[ ! -s "$environment/services" ]
+echo "ok - restarting without an installed service fails before any service-manager calls"
 printf 'user modification\n' >>"$runtime/recovery.lua"
 printf 'unrelated file\n' >"$runtime/user-notes"
 mkdir -p "$home/.local/state/rex-recover/launches"

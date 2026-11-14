@@ -14,11 +14,14 @@ state_dir=${REX_RECOVER_STATE_DIR:-${XDG_STATE_HOME:-"$HOME/.local/state"}/rex-r
 server=
 config=${REX_RECOVER_CONFIG:-${XDG_CONFIG_HOME:-"$HOME/.config"}/rex-recover/apps.conf}
 interval=2
+action=watch
 
 # Interactive shells can use environment defaults, while a service needs to
 # pin its own paths without depending on the environment it inherited.
 usage() {
   echo "Usage: rex-recover [--rex PATH] [--state-dir DIR] [--server unix://PATH] [--config FILE] [--interval SECONDS]"
+  echo "       rex-recover apps [--config FILE]"
+  echo "       rex-recover service restart"
 }
 
 # Paths can contain spaces or shell syntax. Parsing option/value pairs as
@@ -26,6 +29,17 @@ usage() {
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --help|-h) usage; exit 0 ;;
+    apps)
+      [ "$action" = watch ] || { usage >&2; exit 2; }
+      action=apps
+      shift
+      ;;
+    service)
+      [ "$action" = watch ] && [ "$#" -ge 2 ] && [ "$2" = restart ] ||
+        { usage >&2; exit 2; }
+      action=restart
+      shift 2
+      ;;
     --rex|--state-dir|--server|--config|--interval)
       [ "$#" -ge 2 ] || { usage >&2; exit 2; }
       case "$1" in
@@ -40,6 +54,28 @@ while [ "$#" -gt 0 ]; do
     *) usage >&2; exit 2 ;;
   esac
 done
+
+# Managing configuration must work even when Rex is not installed or running.
+if [ "$action" = apps ]; then
+  exec /bin/sh "$root/scripts/apps.sh" "$config"
+fi
+if [ "$action" = restart ]; then
+  . "$root/scripts/setup.sh"
+  paths
+  [ -f "$service_file" ] ||
+    die "Watcher user service not installed at $service_file. Run sh install.sh and enable service setup."
+  case "$platform" in
+    Darwin)
+      # Force-killing only the supervisor can strand a worker holding its lock.
+      # Unload the whole job before loading its existing configuration again.
+      if service_loaded; then launchctl bootout "gui/$uid/local.rex-recover"; fi
+      launchctl bootstrap "gui/$uid" "$service_file"
+      ;;
+    Linux) systemctl --user restart rex-recover.service ;;
+  esac
+  echo "Watcher service restart requested. Rex and its applications were not restarted."
+  exit 0
+fi
 
 # Recovery checks local process identities and files, so a remote connection
 # would not provide the information needed to make a safe recovery decision.
