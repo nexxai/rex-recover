@@ -1,4 +1,4 @@
-# Rex Recover
+![Rex Recover](assets/branding/header.png)
 
 Get back to work after a Rex server restart without rebuilding your terminal
 workflow by hand.

@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<link rel="icon" href="data:,">
+<title>Branding checks</title>
+<style>
+    body { font: 16px/1.6 monospace; margin: 32px; }
+    iframe { position: absolute; left: -4000px; top: 0; border: 0; }
+</style>
+<h1>Branding checks</h1>
+<pre id="results">Running…</pre>
+<script type="module">
+    function assert(condition, message) {
+        if (!condition) {
+            throw new Error(message);
+        }
+    }
+
+    async function page(filename, width, height) {
+        const frame = document.createElement('iframe');
+        frame.width = width;
+        frame.height = height;
+        const loaded = new Promise((resolve) => {
+            frame.onload = resolve;
+        });
+        frame.src = filename;
+        document.body.append(frame);
+        await loaded;
+        return frame.contentDocument;
+    }
+
+    function hasFont(document, weight) {
+        return [...document.fonts].some((face) =>
+            face.family.replace(/^['"]|['"]$/g, '') === 'Host Grotesk'
+            && face.weight === weight
+            && face.status === 'loaded');
+    }
+
+    async function imagePixels(document, filename) {
+        const image = new Image();
+        image.src = new URL(filename, document.baseURI);
+        await image.decode();
+        const canvas = document.createElement('canvas');
+        canvas.width = image.naturalWidth;
+        canvas.height = image.naturalHeight;
+        const context = canvas.getContext('2d');
+        context.drawImage(image, 0, 0);
+        return context.getImageData(0, 0, canvas.width, canvas.height).data;
+    }
+
+    async function checkHeader() {
+        const document = await page('header.html', 2243, 701);
+        await document.defaultView.headerReady;
+        await document.fonts.ready;
+        const canvas = document.querySelector('#artwork');
+        assert(canvas.width === 2243 && canvas.height === 701, 'Header must remain 2243 × 701.');
+        assert(hasFont(document, '800'), 'Header must load the real Host Grotesk 800 font.');
+        const context = canvas.getContext('2d');
+        assert(context.font.includes('800') && context.font.includes('Host Grotesk'), 'Header uses the wrong font.');
+        const original = await imagePixels(document, 'original.png');
+        const rendered = context.getImageData(0, 0, 2243, 701).data;
+        let changedWordmarkPixels = 0;
+        for (let y = 0; y < 701; y++) {
+            for (let x = 0; x < 2243; x++) {
+                const offset = (y * 2243 + x) * 4;
+                const changed = [0, 1, 2, 3].some((channel) =>
+                    original[offset + channel] !== rendered[offset + channel]);
+                if (changed) {
+                    assert(x >= 195 && x < 1380 && y >= 250 && y <= 430, 'Approved artwork changed outside the title.');
+                    changedWordmarkPixels++;
+                }
+            }
+        }
+        assert(changedWordmarkPixels > 50000, 'The original wordmark was not replaced.');
+    }
+
+    async function checkSocial() {
+        const document = await page('social-preview.html', 1280, 640);
+        await document.fonts.ready;
+        const artwork = document.querySelector('#artwork');
+        const bounds = artwork.getBoundingClientRect();
+        assert(bounds.width === 1280 && bounds.height === 640, 'Social preview must be exactly 1280 × 640.');
+        const title = document.querySelector('#social-title');
+        const tagline = document.querySelector('#tagline');
+        const logo = document.querySelector('#logo');
+        assert(title && tagline && logo, 'Social preview needs the title, tagline, and approved logo.');
+        assert(title.textContent === 'Rex Recover', 'Social title changed.');
+        assert(
+            tagline.innerText.replace(/\s+/g, ' ').trim() ===
+                'Get back to work after a Rex server restart without rebuilding your terminal workflow by hand.',
+            'Use the existing one-sentence README tagline.',
+        );
+        assert(hasFont(document, '800') && hasFont(document, '500'), 'Both real Host Grotesk weights must load.');
+        assert(document.defaultView.getComputedStyle(title).fontWeight === '800', 'Title must be ExtraBold.');
+        for (const element of [title, tagline, logo]) {
+            const content = element === logo ? element : document.createRange();
+            if (element !== logo) {
+                content.selectNodeContents(element);
+            }
+            const rectangle = content.getBoundingClientRect();
+            assert(
+                rectangle.left >= bounds.left + 80 && rectangle.right <= bounds.right - 80
+                    && rectangle.top >= bounds.top + 80 && rectangle.bottom <= bounds.bottom - 80,
+                `${element.id} crosses the 80px safe border.`,
+            );
+        }
+        assert(document.defaultView.getComputedStyle(logo).overflow === 'hidden', 'Logo crop must not bleed out.');
+
+        // The crop must enclose the source's colorful icon, not cut off the
+        // arrow's tip or tail. Detect that independently from its SVG viewport.
+        const original = await imagePixels(document, 'original.png');
+        const crop = logo.querySelector('svg').viewBox.baseVal;
+        for (let y = 0; y < 701; y++) {
+            for (let x = 1400; x < 2243; x++) {
+                const offset = (y * 2243 + x) * 4;
+                const channels = [original[offset], original[offset + 1], original[offset + 2]];
+                if (Math.max(...channels) > 60 && Math.max(...channels) - Math.min(...channels) > 30) {
+                    assert(
+                        x >= crop.x && x < crop.x + crop.width && y >= crop.y && y < crop.y + crop.height,
+                        'Social preview clips the approved rainbow icon.',
+                    );
+                }
+            }
+        }
+    }
+
+    async function checkExports() {
+        for (const [filename, width, height] of [['header.png', 2243, 701], ['social-preview.png', 1280, 640]]) {
+            const response = await fetch(filename);
+            assert(response.ok, `${filename} is missing.`);
+            const bytes = new Uint8Array(await response.arrayBuffer());
+            const signature = [137, 80, 78, 71, 13, 10, 26, 10];
+            assert(signature.every((byte, index) => bytes[index] === byte), `${filename} must be a PNG.`);
+            const image = new Image();
+            image.src = filename;
+            await image.decode();
+            assert(image.naturalWidth === width && image.naturalHeight === height, `${filename} has the wrong size.`);
+            if (filename === 'social-preview.png') {
+                assert(bytes.length < 1000000, 'GitHub social previews must be under 1 MB.');
+            }
+        }
+
+        // Check the exported pixels too: passing layout checks is insufficient
+        // if a screenshot was cropped, scaled, or captured before fonts loaded.
+        const pixels = await imagePixels(document, 'social-preview.png');
+        for (let y = 0; y < 640; y++) {
+            for (let x = 0; x < 1280; x++) {
+                if (x < 80 || x >= 1200 || y < 80 || y >= 560) {
+                    const offset = (y * 1280 + x) * 4;
+                    assert(
+                        pixels[offset] === 13 && pixels[offset + 1] === 8
+                            && pixels[offset + 2] === 21 && pixels[offset + 3] === 255,
+                        'Important content or a capture artifact entered the exported safe border.',
+                    );
+                }
+            }
+        }
+    }
+
+    async function run() {
+        const results = [];
+        const checks = [['Header', checkHeader], ['Social preview', checkSocial], ['PNG exports', checkExports]];
+        for (const [name, check] of checks) {
+            try {
+                await check();
+                results.push({ name, passed: true });
+            } catch (error) {
+                results.push({ name, passed: false, error: error.message });
+            }
+        }
+        const failed = results.filter((result) => !result.passed).length;
+        document.querySelector('#results').textContent = results.map((result) =>
+            `${result.passed ? 'PASS' : 'FAIL'} ${result.name}${result.error ? `: ${result.error}` : ''}`).join('\n');
+        document.title = `${failed ? 'FAIL' : 'PASS'} — Branding checks`;
+        return { passed: results.length - failed, failed, results };
+    }
+
+    window.brandingChecks = run();
+</script>
+</html>
