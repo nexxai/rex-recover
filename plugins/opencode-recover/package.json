@@ -1,0 +1,15 @@
+{
+    "name": "@rex-recover/opencode",
+    "version": "0.1.0",
+    "private": true,
+    "type": "module",
+    "exports": {
+        ".": "./server.mjs",
+        "./tui": "./tui.mjs",
+        "./rpc": "./rpc.mjs"
+    },
+    "peerDependencies": {
+        "@opencode/plugin": "2.3.x",
+        "solid-js": "^1.9.17"
+    }
+}
