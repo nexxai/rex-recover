@@ -4,6 +4,9 @@
 # Artifacts can include invocation data, so they must not be world-readable.
 set -eu
 umask 077
+# Never inherit a user's opt-in mode or recording path into generic fixtures.
+unset REX_RECOVER_CONFIG REX_RECOVER_STATE_DIR REX_RECOVER_LAUNCH_DIR REX_RECOVER_SESSIONS
+unset CODEX_HOME ENV BASH_ENV
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 rex_bin=${REX_BIN:-rex}
@@ -13,6 +16,11 @@ sh "$root/tests/launcher.sh"
 sh "$root/tests/commands.sh"
 sh "$root/tests/bash.sh"
 sh "$root/tests/setup.sh"
+sh "$root/tests/codex-setup.sh"
+sh "$root/tests/codex-real-contract.sh"
+node --test "$root/tests/codex-hook.mjs"
+node --experimental-vm-modules --test "$root"/tests/opencode-*.mjs
+env REX_BIN="$(command -v "$rex_bin")" sh "$root/tests/watch-scheduling.sh" watch
 # A distinct state tree and socket are essential: these tests deliberately
 # stop and kill their server and must never control the user's working server.
 # Resolve the physical path so macOS's /var symlink cannot confuse identity checks.
@@ -20,6 +28,8 @@ temporary=$(mktemp -d "${REX_TEST_TMPDIR:-${TMPDIR:-/tmp}}/rex-recovery-tests.XX
 temporary=$(CDPATH= cd -- "$temporary" && pwd -P)
 endpoint="unix://$temporary/rex.sock"
 watcher_pid=
+test_shell=$(command -v zsh)
+mkdir "$temporary/zsh"
 printf '%s\n' sample-viewer sample-worker sample-editor custom-worker >"$temporary/apps.conf"
 
 # Stop/kill permission must come from the responding server's identity, not
@@ -85,8 +95,10 @@ trap 'exit 143' TERM
 
 # A separate state directory prevents restoring or modifying the user's saved
 # sessions. A blank config prevents their normal automation from running here.
+# Restored panes start login shells, not the fixture's original command.
 start_server() {
   rex_test server start --state-dir "$temporary/server" \
+    --env "ZDOTDIR=$temporary/zsh" --env "SHELL=$test_shell" \
     --config "$temporary/no-config.lua" >/dev/null
   private_server_pid >/dev/null || exit 1
 }
@@ -107,7 +119,15 @@ start_watcher() {
 }
 
 start_server
+env REX_BIN="$(command -v "$rex_bin")" REX_SERVER="$endpoint" sh "$root/tests/sessions.sh"
+env REX_BIN="$(command -v "$rex_bin")" REX_SERVER="$endpoint" sh "$root/tests/claude-sessions.sh"
+env REX_BIN="$(command -v "$rex_bin")" REX_SERVER="$endpoint" sh "$root/tests/session-opt-in.sh"
+env REX_BIN="$(command -v "$rex_bin")" sh "$root/tests/driver-loading.sh"
 rex_test do "$root/tests/test.lua" --all root="$root" test_dir="$temporary"
+rex_test do "$root/tests/sessions.lua" --all root="$root" test_dir="$temporary" phase=unit
+rex_test do "$root/tests/claude-sessions.lua" --all root="$root" test_dir="$temporary" phase=unit
+rex_test do "$root/tests/opencode-sessions.lua" --all root="$root" test_dir="$temporary" phase=unit
+env REX_BIN="$(command -v "$rex_bin")" REX_SERVER="$endpoint" sh "$root/tests/selection-adversarial.sh"
 
 # Looking at a live app's cwd would restore it in the wrong place after it has
 # changed directory. This fixture makes that shortcut observably incorrect,
@@ -228,4 +248,104 @@ arguments exit
 stop_server
 start_server
 arguments not-restored
-echo "All tests passed (including graceful stop and SIGKILL recovery)."
+
+# Without a qualifying hook, opt-in Codex must fail closed while a separate
+# generic invocation still recovers exactly. Both use stand-ins.
+sh "$root/tests/sessions.sh" prepare "$temporary"
+printf 'codex\n' >>"$temporary/apps.conf"
+# Configuration is read once per worker. Reconnect it before adding the panes.
+kill "$watcher_pid"
+wait "$watcher_pid" 2>/dev/null || :
+watcher_pid=
+start_watcher
+sessions() {
+  rex_test do "$root/tests/sessions.lua" --all \
+    root="$root" test_dir="$temporary" phase="$1"
+}
+sessions setup
+sessions checkpoint
+sessions new
+sessions checkpoint
+server_pid=$(private_server_pid)
+kill -KILL "$server_pid"
+sleep 1
+start_server
+sessions restored
+sessions checkpoint
+server_pid=$(private_server_pid)
+kill -KILL "$server_pid"
+sleep 1
+start_server
+sessions restored
+sessions checkpoint
+sessions exit
+stop_server
+start_server
+sessions not-restored
+
+# This stand-in implements only documented `agents --json` and CLI boundaries.
+# The absolute recorded executable is intentionally absent from the watcher PATH.
+sh "$root/tests/claude-sessions.sh" prepare "$temporary"
+printf 'claude\n' >>"$temporary/apps.conf"
+kill "$watcher_pid"
+wait "$watcher_pid" 2>/dev/null || :
+watcher_pid=
+start_watcher
+claude_sessions() {
+  rex_test do "$root/tests/claude-sessions.lua" --all \
+    root="$root" test_dir="$temporary" rex_bin="$(command -v "$rex_bin")" endpoint="$endpoint" phase="$1"
+}
+claude_sessions setup
+claude_sessions checkpoint
+claude_sessions invalidate
+claude_sessions checkpoint
+server_pid=$(private_server_pid)
+kill -KILL "$server_pid"
+sleep 1
+start_server
+claude_sessions restored
+claude_sessions checkpoint
+server_pid=$(private_server_pid)
+kill -KILL "$server_pid"
+sleep 1
+start_server
+claude_sessions restored
+claude_sessions checkpoint
+claude_sessions exit
+stop_server
+start_server
+claude_sessions not-restored
+
+# OpenCode is a shell stand-in for the documented CLI and companion sidecar
+# protocol. Neither the real application nor its plugin SDK is a prerequisite.
+sh "$root/tests/opencode-sessions.sh" prepare "$temporary"
+printf 'opencode\n' >>"$temporary/apps.conf"
+kill "$watcher_pid"
+wait "$watcher_pid" 2>/dev/null || :
+watcher_pid=
+start_watcher
+opencode_sessions() {
+  rex_test do "$root/tests/opencode-sessions.lua" --all \
+    root="$root" test_dir="$temporary" phase="$1"
+}
+opencode_sessions setup
+opencode_sessions checkpoint
+opencode_sessions invalidate
+opencode_sessions checkpoint
+server_pid=$(private_server_pid)
+kill -KILL "$server_pid"
+sleep 1
+start_server
+opencode_sessions restored
+opencode_sessions checkpoint
+server_pid=$(private_server_pid)
+kill -KILL "$server_pid"
+sleep 1
+start_server
+opencode_sessions restored
+opencode_sessions checkpoint
+opencode_sessions exit
+stop_server
+start_server
+opencode_sessions not-restored
+echo "All tests passed (generic recovery and mock Codex, Claude, and OpenCode sessions)."

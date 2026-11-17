@@ -46,7 +46,7 @@ if ! env -u XDG_CONFIG_HOME -u XDG_STATE_HOME HOME="$temporary/version-home" PAT
   cat "$temporary/version.err" >&2
   exit 1
 fi
-printf 'rex-recover 0.1.0\n' >"$temporary/expected-version"
+printf 'rex-recover 0.2.0\n' >"$temporary/expected-version"
 cmp "$temporary/expected-version" "$temporary/version.out"
 [ ! -s "$temporary/version.err" ]
 [ ! -e "$temporary/version-call.log" ]

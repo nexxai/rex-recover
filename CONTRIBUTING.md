@@ -52,8 +52,7 @@ an unrun test is not a passing test.
 
 ### Running the tests
 
-See the [manual](docs/manual.md) for prerequisites. The full suite also needs
-both bash and zsh:
+See the [test prerequisites](docs/manual.md#tests) before running the full suite:
 
 ```sh
 sh tests/run.sh
@@ -71,9 +70,9 @@ against an actual Linux service manager in your contribution notes.
 
 ## Bringing another shell
 
-We would love integrations for shells beyond zsh and bash. You do not need
-to add support for individual apps: every configured executable follows the
-same contract.
+We would love integrations for shells beyond zsh and bash. Default recovery
+does not need individual app support: every configured executable follows the
+same generic contract.
 
 - Use the existing shared config parser and launch recorder rather than
   inventing another app list, file format, or argument-recording path.
@@ -86,6 +85,18 @@ same contract.
 The existing integrations in [`shell/`](shell/) and their tests in
 [`tests/`](tests/) are useful starting points. Explain any limitations of your
 shell's approach so users know when capture can be bypassed.
+
+## Adding a session driver
+
+Use the [driver interface and AI starter prompt](drivers/README.md). The
+[recovery design](docs/design.md) explains which responsibilities stay in the
+app driver and which belong to the shared watcher.
+
+Keep the default suite independent of the app being installed. Base mocks on
+verified behavior or official documentation, and test observable capture and
+resume behavior. Any real-app proof must be opt-in and isolated from user
+sessions, configuration, credentials, and billable model requests. Distinguish
+mock-only validation from live verification.
 
 ## Comments and license
 

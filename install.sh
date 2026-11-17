@@ -19,7 +19,8 @@ fi
 # should leave the installation untouched; signals should not strand staging
 # files. This cleanup is restricted to files in our own mktemp directory.
 stage=$(mktemp -d "${TMPDIR:-/tmp}/rex-recover-install.XXXXXX")
-trap 'rm -f "$stage/"*; rmdir "$stage"' EXIT
+plugin_stage_parent=
+trap 'rm -rf "$stage"; if [ -n "$plugin_stage_parent" ]; then rm -rf "$plugin_stage_parent"; fi' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 # Preserve previous ownership separately: this install will replace its manifest
@@ -145,10 +146,131 @@ if [ "$install_service" = no ]; then
   service_file=$old_service
   log_dir=$(meta logs)
 fi
+
+install_opencode=no
+opencode_plugin=$(meta opencode_plugin)
+opencode_cli=$(meta opencode_cli)
+priorTitle=$(meta priorTitle)
+priorTerminal=$(meta priorTerminal)
+validate_opencode_ownership
+opencode_bin=$(command -v opencode 2>/dev/null || :)
+if [ -n "$opencode_bin" ] && [ -f "$opencode_bin" ] && [ -x "$opencode_bin" ]; then
+  echo "OpenCode detected."
+  echo "After a Rex crash, this helper lets Rex reopen the saved conversation you were using,"
+  echo "rather than just relaunching OpenCode."
+  echo "  Helper location: $config_home/opencode/plugins/rex-recover"
+  echo "Other OpenCode settings and plugins are preserved."
+  echo "Installing the helper does not add monitored apps or start OpenCode."
+  if confirm "Install/update the optional OpenCode recovery helper?"; then
+    [ -z "${OPENCODE_CONFIG_DIR:-}" ] ||
+      die "OPENCODE_CONFIG_DIR is set. Resolve its global CLI/plugin paths and install manually, or unset it before setup."
+    [ "${OPENCODE_CLI_CONFIG_CONTENT+x}" != x ] ||
+      die "OPENCODE_CLI_CONFIG_CONTENT is authoritative. Resolve inline CLI settings manually before companion setup."
+    if [ -n "$opencode_plugin" ] && [ "$opencode_plugin" != "$config_home/opencode/plugins/rex-recover" ]; then
+      die "The previous companion uses another config directory; remove/migrate that installation manually before changing its location."
+    fi
+    opencode_interpreter
+    opencode_plugin="$config_home/opencode/plugins/rex-recover"
+    opencode_cli="$config_home/opencode/cli.json"
+    valid_path "$opencode_plugin"
+    valid_path "$opencode_cli"
+    [ ! -L "$opencode_plugin" ] || die "The OpenCode companion directory is symlinked; install manually without replacing it."
+    if [ -e "$opencode_plugin" ] && [ ! -d "$opencode_plugin" ]; then
+      die "The OpenCode companion path is not a directory: $opencode_plugin"
+    fi
+    for companion in $opencode_files; do
+      [ ! -d "$opencode_plugin/$companion" ] || die "Companion file is a directory: $opencode_plugin/$companion"
+    done
+    "$javascript" "$source_root/scripts/opencode-config.mjs" install "$opencode_cli" \
+      "$install_root/plugins/opencode-recover" "$opencode_plugin" "$stage/opencode.json" \
+      "$stage/opencode.snapshot" "${priorTitle:--}" "${priorTerminal:--}"
+    priorTitle=
+    priorTerminal=
+    validate_opencode_ownership
+    install_opencode=yes
+  fi
+fi
+
+install_codex=no
+edit_codex_daemon=no
+codex_hooks=$(meta codex_hooks)
+codex_hook_command=$(meta codex_hook_command)
+codex_daemon_config=$(meta codex_daemon_config)
+codex_bin=$(command -v codex 2>/dev/null || :)
+if [ -n "$codex_bin" ] && [ -f "$codex_bin" ] && [ -x "$codex_bin" ]; then
+  case "$codex_bin" in /*) ;; *) codex_bin="$PWD/$codex_bin" ;; esac
+  codex_home=${CODEX_HOME:-"$HOME/.codex"}
+  codex_home=${codex_home%/}
+  echo "Codex detected."
+  echo "For better crash recovery, the optional hook helps Rex reopen the Codex conversation in the right terminal."
+  echo "Codex's shared daemon can give hooks the environment of the terminal that started it, not the one you use."
+  echo "Rex uses the hook to match your terminal only when Codex runs without the shared daemon."
+  echo "Skip either option to leave that part of Codex unchanged."
+  echo "  Per launch: run 'codex --no-daemon' in Rex. Remember the flag each time; other launches can still use the daemon."
+  echo "  Persistent: set [features] daemon_auto_start=false in $codex_home/config.toml."
+  echo "    This prevents normal 'codex' launches from starting the daemon, including outside Rex."
+  echo "    After you stop any existing daemon yourself, normal 'codex' can run without the flag."
+  echo "    An already-running daemon can still be used. Rex Recover does not start or stop it."
+  echo "    Without a shared daemon, persistent remote connections and background tasks may be unavailable or interrupted."
+  echo "    'codex queue' cannot use --no-daemon for local queuing."
+  if confirm "Set daemon_auto_start=false for normal Codex launches?"; then
+    edit_codex_daemon=yes
+  fi
+  echo "  Hook location: $codex_home/hooks.json (Codex hook trust and monitored apps are unchanged)."
+  if confirm "Install the optional Codex SessionStart hook?"; then
+    install_codex=yes
+  fi
+  if [ "$edit_codex_daemon" = yes ] || [ "$install_codex" = yes ]; then
+    codex_settings="$codex_home/config.toml"
+    codex_hook_target="$codex_home/hooks.json"
+    valid_path "$codex_settings"
+    valid_path "$codex_hook_target"
+    valid_path "$codex_bin"
+    if [ "$edit_codex_daemon" = yes ] && [ -n "$codex_daemon_config" ] &&
+      [ "$codex_daemon_config" != "$codex_settings" ]; then
+      die "A previous daemon setting change was recorded for another Codex home; resolve it manually first."
+    fi
+    if [ "$install_codex" = yes ] && [ -n "$codex_hooks" ] && [ "$codex_hooks" != "$codex_hook_target" ]; then
+      die "The previous Codex hook uses another Codex home; remove/migrate it manually before changing its location."
+    fi
+    codex_js=$(command -v node 2>/dev/null || command -v bun 2>/dev/null || :)
+    [ -f "$codex_js" ] && [ -x "$codex_js" ] ||
+      die "Codex setup needs Node.js or Bun. Install either, then rerun; or decline both Codex settings changes."
+    case "$codex_js" in /*) ;; *) codex_js="$PWD/$codex_js" ;; esac
+    valid_path "$codex_js"
+    codex_editor="$source_root/scripts/codex-config.mjs"
+    if [ "$edit_codex_daemon" = yes ]; then
+      "$codex_js" "$codex_editor" snapshot "$codex_settings" "$stage/codex-daemon"
+    fi
+    if [ "$install_codex" = yes ]; then
+      codex_runtime_hook="$install_root/scripts/codex-session-start.mjs"
+      [ -f "$source_root/scripts/codex-session-start.mjs" ] || die "Missing runtime source: scripts/codex-session-start.mjs"
+      # Version managers can put a short-lived shell symlink on PATH.
+      hook_js=$("$codex_js" --eval 'process.stdout.write(require("node:fs").realpathSync(process.execPath))')
+      valid_path "$hook_js"
+      new_codex_command="exec $(quote "$hook_js") $(quote "$codex_runtime_hook")"
+      "$codex_js" "$codex_editor" install-hooks "$codex_hook_target" "$stage/codex-hooks" \
+        "$new_codex_command" "$codex_runtime_hook" "$codex_hook_command"
+    fi
+  fi
+fi
+# A damaged source package must fail before any persistent installation change.
+for relative in $runtime_files; do
+  [ -f "$source_root/$relative" ] || die "Missing runtime source: $relative"
+done
 # No persistent installation changes belong above this final approval.
 if ! confirm "Copy the runtime and commands, save this config, and apply the selected changes (backing up changed files)?"; then
   echo "Cancelled; no installation changes made."
   exit 0
+fi
+if [ -f "$stage/opencode.json" ]; then
+  "$javascript" "$source_root/scripts/opencode-config.mjs" check "$opencode_cli" "$stage/opencode.snapshot"
+fi
+if [ "$edit_codex_daemon" = yes ]; then
+  "$codex_js" "$codex_editor" edit-daemon "$codex_settings" "$stage/codex-daemon" "$codex_bin"
+fi
+if [ "$install_codex" = yes ]; then
+  "$codex_js" "$codex_editor" check "$codex_hook_target" "$stage/codex-hooks"
 fi
 
 # A running service could read a mixture of old and new files during replacement.
@@ -167,6 +289,28 @@ for relative in $runtime_files; do
 done
 mkdir -p "$state_dir"
 copy_file "$stage/apps.conf" "$config" 600
+if [ "$install_opencode" = yes ]; then
+  publish_opencode
+  if [ -f "$stage/opencode.json" ]; then
+    "$javascript" "$source_root/scripts/opencode-config.mjs" check "$opencode_cli" "$stage/opencode.snapshot"
+    copy_file "$stage/opencode.json" "$opencode_cli" ""
+  fi
+fi
+if [ "$edit_codex_daemon" = yes ] && [ -f "$stage/codex-daemon/updated" ]; then
+  "$codex_js" "$codex_editor" publish "$codex_settings" "$stage/codex-daemon"
+  codex_daemon_config=$codex_settings
+fi
+if [ "$install_codex" = yes ]; then
+  "$codex_js" "$codex_editor" publish "$codex_hook_target" "$stage/codex-hooks"
+  codex_hooks=$codex_hook_target
+  codex_hook_command=$(cat "$stage/codex-hooks/owned-command")
+  active_codex_hook=$(cat "$stage/codex-hooks/active-command")
+fi
+
+# Select only configured companions, and respect explicit user overrides.
+session_apps=
+if [ -n "$opencode_plugin" ]; then session_apps=opencode; fi
+if [ -n "$codex_hooks" ]; then session_apps="${session_apps:+$session_apps,}codex"; fi
 
 # Small launchers keep the user-facing commands on PATH while the runtime lives
 # in the platform's data directory. Saved defaults make them independent of rc
@@ -200,6 +344,9 @@ if [ "$edit_shell" = yes ]; then
     echo 'if [ -n "${REX_SESSION:-}" ] && [ -n "${REX_BLOCK:-}" ]; then'
     printf '  export REX_RECOVER_CONFIG=%s\n' "$(quote "$config")"
     printf '  export REX_RECOVER_STATE_DIR=%s\n' "$(quote "$state_dir")"
+    if [ -n "$session_apps" ]; then
+      printf '  if [ -z "${REX_RECOVER_SESSIONS:-}" ]; then export REX_RECOVER_SESSIONS=%s; fi\n' "$session_apps"
+    fi
     printf '  . %s\n' "$(quote "$install_root/shell/rex-recover.$integration")"
     echo 'fi'
     echo '# <<< Rex Recover <<<'
@@ -278,10 +425,24 @@ fi
   printf 'shell\t%s\nshell_created\t%s\nservice\t%s\nlogs\t%s\n' \
     "$shell_file" "${shell_created:-0}" "$service_file" "$log_dir"
   printf 'block_checksum\t%s\n' "$block_checksum"
+  printf 'opencode_plugin\t%s\nopencode_cli\t%s\npriorTitle\t%s\npriorTerminal\t%s\n' \
+    "$opencode_plugin" "$opencode_cli" "$priorTitle" "$priorTerminal"
+  if [ -n "$codex_daemon_config" ]; then printf 'codex_daemon_config\t%s\n' "$codex_daemon_config"; fi
+  if [ -n "$codex_hooks" ]; then printf 'codex_hooks\t%s\n' "$codex_hooks"; fi
+  if [ -n "$codex_hook_command" ]; then printf 'codex_hook_command\t%s\n' "$codex_hook_command"; fi
   for relative in $runtime_files; do owned "$install_root/$relative"; done
   owned "$command_dir/rex-recover"
   owned "$command_dir/rex-recover-uninstall"
   if [ "$install_service" = yes ]; then owned "$service_file"; else previous_owned "$service_file"; fi
+  if [ -n "$opencode_plugin" ]; then
+    for companion in $opencode_files; do
+      if [ "$install_opencode" = yes ]; then
+        owned "$opencode_plugin/$companion"
+      else
+        previous_owned "$opencode_plugin/$companion"
+      fi
+    done
+  fi
 } >"$stage/install.info"
 copy_file "$stage/install.info" "$install_root/install.info" 600
 
@@ -299,5 +460,35 @@ fi
 echo "Installed. Open new terminals to activate capture; relaunch newly monitored commands once."
 echo "Start manually: $command_dir/rex-recover"
 echo "Manage apps:    $command_dir/rex-recover apps"
+if [ "$install_opencode" = yes ]; then
+  echo "OpenCode companion installed; native config watching activates it without a service restart."
+fi
+if [ -n "$session_apps" ]; then
+  if [ "$edit_shell" = yes ]; then
+    echo "New Rex terminals enable session recovery for $session_apps only when REX_RECOVER_SESSIONS is unset/empty; existing explicit values are preserved."
+  else
+    echo "To enable session recovery for $session_apps, export REX_RECOVER_SESSIONS=$session_apps before capture setup."
+  fi
+fi
+if [ -n "$opencode_plugin" ]; then
+  echo "Add opencode with 'rex-recover apps' if not already monitored; other apps are unchanged."
+fi
+if [ "$install_codex" = yes ]; then
+  echo "In Codex, open /hooks, choose SessionStart, select the command below, and press t to trust only this hook."
+  printf '  %s\n' "$active_codex_hook"
+  if [ "$active_codex_hook" != "$new_codex_command" ]; then
+    echo "Kept the previously registered command so its trust is unchanged."
+  fi
+  echo "If its interpreter is no longer installed, remove only this hook from hooks.json, rerun setup, and review the new command."
+  echo "Add codex with 'rex-recover apps' if not already monitored; other apps are unchanged."
+fi
+if [ "$edit_codex_daemon" = yes ]; then
+  if [ -f "$stage/codex-daemon/updated" ]; then
+    echo "Set daemon_auto_start=false in $codex_settings. No running daemon was changed."
+    echo "To undo this, remove the daemon_auto_start=false entry under [features] to restore the default, or set it back to true."
+  else
+    echo "The native Codex editor left $codex_settings unchanged."
+  fi
+fi
 if [ -n "$service_file" ]; then echo "Restart watcher: $command_dir/rex-recover service restart"; fi
 echo "Uninstall:      $command_dir/rex-recover-uninstall"
