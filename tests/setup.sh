@@ -310,7 +310,7 @@ y
     REX_RECOVER_CONFIG="$environment/missing.conf" REX_RECOVER_STATE_DIR="$environment/version-state" \
     PATH="$fixture_path" "$home/.local/bin/rex-recover" --version \
     >"$environment/version.out" 2>"$environment/version.err"
-  printf 'rex-recover 0.1.0\n' >"$environment/expected-version"
+  printf 'rex-recover 0.2.0\n' >"$environment/expected-version"
   cmp "$environment/expected-version" "$environment/version.out"
   [ ! -s "$environment/version.err" ]
   [ ! -f "$environment/rex-calls" ]
