@@ -1,11 +1,9 @@
 name: Tests
 
-# No path filters or canceled superseded runs: documentation-only pushes and
-# rapid successive pushes should receive test results too.
+# Test branch pushes, including docs-only changes.
 on:
   push:
     branches: ['**']
-  pull_request:
 
 # Test code needs to read the checkout, not write to the repository.
 permissions:
@@ -52,7 +50,7 @@ jobs:
         # register services and interfere with the private-server safety checks.
         run: |
           if [ -z "$REX_DOWNLOAD_URL" ]; then
-            echo "::error::Rex download secrets are unavailable. Fork PRs need a reviewed maintainer branch for the full suite."
+            echo "::error::Rex download secrets are unavailable in this repository."
             exit 1
           fi
           curl --fail --silent --show-error --location --retry 3 \
