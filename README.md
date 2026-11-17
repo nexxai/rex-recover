@@ -3,75 +3,70 @@
 Get back to work after a Rex server restart without rebuilding your terminal
 workflow by hand.
 
-## See it in action
+[Read the manual](docs/manual.md) for setup, configuration, and recovery limits.
 
-Watch Rex Recover relaunch monitored commands after a Rex server restart.
+## See it in action
 
 https://github.com/user-attachments/assets/07f4cd47-7347-466f-a9b6-72ec8cec1763
 
 ## Why it exists
 
-Rex can bring back your sessions and terminal layout, but the commands you were
-running still need to be launched again. If your work spans several projects
-and panes, that means remembering which tool belonged where, which folder you
-started it in, and which arguments you used.
+Rex brings back your panes and their layout. Rex Recover brings back the tools
+you chose to keep there, from the folders and with the arguments you originally
+used. That matters when a restart leaves several projects' worth of panes
+sitting at shell prompts.
 
-Rex Recover remembers the commands you choose to monitor and relaunches those
-last seen running in their original terminals, from their original folders,
-with their original arguments. Commands with no arguments work the same way.
+- **You choose what can run again.** Relaunching a command repeats its
+  arguments and can repeat its effects. Nothing is monitored by default.
+- **Launch details are recorded at the source.** Rex can see which process
+  is running in the pane, but it doesn't expose the full arguments. Capturing the
+  launch also preserves the original folder if the app changes directories.
+- **The watcher runs outside Rex.** It needs to survive the restart to know
+  what was last seen running. It waits for you to bring Rex back.
 
-It is useful when restarting a collection of editors, development servers, or
-other terminal tools takes you out of your work. You choose what is eligible;
-there are no built-in monitored apps.
+Recovery is based on the last observation. It can't recover unsaved work or the
+state of a process in memory.
 
-This relaunches commands, not their in-memory state or unsaved work. It uses
-the last observed active commands, not your terminal history. There is a small
-observation gap if a command starts or finishes just before Rex stops.
+## Conversation recovery: requirements and tradeoffs
 
-## Why a watcher and a shell integration?
+Opt in to reopen a saved conversation without replaying your original prompt.
+Rex knows which app is running in a pane; only the app can identify the
+conversation you were using.
 
-Each solves a different part of the problem:
-
-- **The shell integration remembers how you started a command.** Rex's process
-  information does not include its arguments. Capturing them at launch also
-  preserves the starting folder, even if the app changes folders later.
-- **The background watcher remembers what was still running.** It lives outside
-  Rex so it can survive a server shutdown, wait for Rex to return, and restore
-  the last observed active commands instead of replaying old ones.
-
-The watcher never starts Rex for you. It waits until you bring Rex back.
+- **Codex requires local mode and an approved `SessionStart` hook.** Run
+  `codex --no-daemon`, or approve disabling daemon auto-start and stop any
+  already-running daemon yourself before using plain `codex`. The shared
+  daemon can give a hook the wrong pane's identity. The flag changes only
+  that launch; the config setting also affects launches outside Rex. See
+  [Codex setup and limits](docs/manual.md#resume-a-saved-codex-conversation-opt-in).
+- **OpenCode requires the Rex Recover plugin.** The installer offers it
+  separately. Its terminal part knows which conversation you selected; its
+  server part verifies where that conversation is saved, so two panes in the
+  same project can come back to different chats. See
+  [OpenCode setup and compatibility](docs/manual.md#resume-a-saved-opencode-conversation-opt-in).
+- **Claude Code uses `claude agents --json`.** Claude already reports which
+  session belongs to a running process, so it needs no plugin or hook. This
+  integration has only been tested with mocks. See
+  [Claude Code setup and limits](docs/manual.md#resume-a-saved-claude-code-conversation-opt-in).
 
 ## Get started
 
-Requires Rex, macOS or Linux, and zsh or bash for automatic launch capture.
-See the [manual](docs/manual.md) for prerequisites and other-shell options.
-
-Download and extract a [release](https://github.com/nexxai/rex-recover/releases),
-or use this checkout. In a terminal **outside Rex**, run:
+On macOS or Linux, download and extract a
+[release](https://github.com/nexxai/rex-recover/releases) or use this checkout.
+Stop any manually running watcher first. In a terminal **outside Rex**, run:
 
 ```sh
 sh install.sh
 ```
 
-The installer asks which commands to monitor and whether to set up shell
-capture and a background user service. It explains its changes and asks before
-applying them. No `sudo` is needed; changed files are backed up.
-
-Stop any manually running watcher first. After installation, open new terminals
-and launch your chosen commands once so their launch details can be recorded.
-
-As your tools change, `rex-recover apps` keeps recovery limited to the commands
-you still want to bring back, without rebuilding the list. Apply changes with
-`rex-recover service restart`; your current Rex sessions keep running.
-See the [manual](docs/manual.md#configure) for the menu and capture-refresh steps.
-
-Check the installed version with `rex-recover --version`. To upgrade, rerun
-`sh install.sh` from the new release; restarting the watcher alone does not
-update its installed code.
-
 **Only monitor commands you are comfortable running again.** Recorded arguments
-may contain secrets. The [manual](docs/manual.md) explains storage, capture
-limits, troubleshooting options, and manual setup.
+are stored locally and may contain secrets. The installer asks before setting up
+automatic capture for zsh or bash, installing a user watcher service, or adding
+an app integration. Open new Rex terminals and launch your chosen commands
+once so they can be recorded.
+
+Use `rex-recover apps` to change what you monitor. The [manual](docs/manual.md)
+covers prerequisites, updates, troubleshooting, and setup for other shells.
 
 ## Uninstall
 
@@ -79,17 +74,15 @@ limits, troubleshooting options, and manual setup.
 ~/.local/bin/rex-recover-uninstall
 ```
 
-Or run `sh uninstall.sh` from this checkout.
-
-This stops the watcher service and removes its managed shell setup and installed
-files. Unrelated settings and backups stay in place. Config, recovery state,
-and logs are kept unless you separately agree to delete them.
+Uninstall removes the managed OpenCode plugin and leaves your other plugins
+alone. If you chose to change Codex's daemon auto-start setting, it explains
+how to undo it. See [what uninstall keeps](docs/manual.md#interactive-installation-and-removal).
 
 ## Contribute
 
 Contributions are welcome, especially integrations for shells beyond zsh and
 bash. Every logic change must include a corresponding test. See
-[CONTRIBUTING.md](CONTRIBUTING.md) for how to get involved.
+[CONTRIBUTING.md](CONTRIBUTING.md) and the [session-driver guide](drivers/README.md).
 
 ## License
 
