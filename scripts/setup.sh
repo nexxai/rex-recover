@@ -192,9 +192,87 @@ previous_owned() {
   fi
 }
 
-# One explicit allowlist serves both copying and removal. A recursive directory
-# cleanup could destroy unrelated notes, backups, or user-added integrations.
-# These relative names intentionally contain no spaces; the roots still can.
+# Names may enter a whitespace-separated file list, never arbitrary paths.
+driver_filename_allowed() {
+  case "$1" in *.lua) ;; *) return 1 ;; esac
+  # Locale collation can make [a-z] accept uppercase; use literal ASCII characters.
+  case "${1%.lua}" in ""|*[!abcdefghijklmnopqrstuvwxyz0123456789_-]*) return 1 ;; esac
+}
+
+opencode_interpreter() {
+  javascript=$(command -v node 2>/dev/null || command -v bun 2>/dev/null || :)
+  [ -n "$javascript" ] ||
+    die "OpenCode setup needs Node.js or Bun. Install either, then rerun; or decline companion setup."
+}
+
+validate_opencode_ownership() {
+  if [ -z "$opencode_plugin$opencode_cli$priorTitle$priorTerminal" ]; then return; fi
+  valid_path "$opencode_plugin"
+  valid_path "$opencode_cli"
+  case "$opencode_plugin" in
+    */../*|*/./*|*//*) die "Unsafe OpenCode path in manifest." ;;
+    */opencode/plugins/rex-recover) ;;
+    *) die "Invalid OpenCode companion directory in manifest." ;;
+  esac
+  [ "$opencode_cli" = "${opencode_plugin%/plugins/rex-recover}/cli.json" ] ||
+    die "Invalid OpenCode CLI path in manifest."
+  if [ -n "$priorTitle$priorTerminal" ]; then
+    case "$priorTitle" in absent|true|false) ;; *) die "Invalid priorTitle in manifest." ;; esac
+    case "$priorTerminal" in absent|present) ;; *) die "Invalid priorTerminal in manifest." ;; esac
+  fi
+  [ ! -L "$opencode_plugin" ] || die "The OpenCode companion directory is symlinked; resolve it manually."
+}
+
+# Backups must not sit under plugins: OpenCode watches that tree and could load
+# a second copy of the companion. Rename only complete packages into discovery.
+publish_opencode() {
+  same_package=yes
+  for companion in $opencode_files; do
+    if [ -L "$opencode_plugin/$companion" ] ||
+      ! cmp -s "$source_root/plugins/opencode-recover/$companion" "$opencode_plugin/$companion"; then
+      same_package=no
+    fi
+  done
+  [ "$same_package" = no ] || return 0
+  opencode_directory=${opencode_cli%/cli.json}
+  mkdir -p "$opencode_directory" "${opencode_plugin%/*}"
+  plugin_stage_parent=$(mktemp -d "$opencode_directory/.rex-recover-stage.XXXXXX")
+  if [ -d "$opencode_plugin" ]; then
+    cp -Rp "$opencode_plugin" "$plugin_stage_parent/package"
+  else
+    mkdir "$plugin_stage_parent/package"
+  fi
+  for companion in $opencode_files; do
+    rm -f "$plugin_stage_parent/package/$companion"
+    cp "$source_root/plugins/opencode-recover/$companion" "$plugin_stage_parent/package/$companion"
+    chmod 644 "$plugin_stage_parent/package/$companion"
+  done
+  opencode_backup="$opencode_directory/rex-recover-backups/package-$(date +%Y%m%d%H%M%S)-$$"
+  "$javascript" "$source_root/scripts/opencode-config.mjs" publish \
+    "$plugin_stage_parent/package" "$opencode_plugin" "$opencode_backup"
+  rmdir "$plugin_stage_parent"
+  plugin_stage_parent=
+}
+
 runtime_files='install.sh uninstall.sh scripts/setup.sh scripts/apps.sh recovery.lua watch.lua
+scripts/driver-context.lua scripts/codex-config.mjs scripts/codex-session-start.mjs drivers/registry.lua
 bin/rex-recover bin/rex-recover-config bin/rex-recover-run
 shell/rex-recover.zsh shell/rex-recover.bash'
+opencode_files='package.json tui.mjs server.mjs rpc.mjs'
+runtime_files="$runtime_files
+scripts/opencode-config.mjs
+plugins/opencode-recover/package.json plugins/opencode-recover/tui.mjs
+plugins/opencode-recover/server.mjs plugins/opencode-recover/rpc.mjs"
+# Uninstall relies on its saved manifest, not drivers in whichever checkout ran it.
+if [ -z "${self:-}" ]; then
+  driver_root=${source_root:-${root:-}}
+  [ -n "$driver_root" ] || die "Cannot locate the runtime driver directory."
+  for driver_file in "$driver_root"/drivers/*.lua; do
+    [ -f "$driver_file" ] || continue
+    driver_name=${driver_file##*/}
+    driver_filename_allowed "$driver_name" || die "Unsafe driver filename: $driver_name"
+    [ "$driver_name" != registry.lua ] || continue
+    runtime_files="$runtime_files
+drivers/$driver_name"
+  done
+fi

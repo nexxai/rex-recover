@@ -22,6 +22,7 @@ fi
 # The recording subshell is not the process that will become the app. Using
 # its identity would make the watcher reject the launch as soon as it exits.
 owner_pid=$$
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 
 # Recording must not change the app's permissions or leave cleanup traps in
 # its execution path. A subshell isolates those side effects; recording failure
@@ -38,10 +39,49 @@ record_launch() (
   app=${requested##*/}
   # An app can cd after startup; its later cwd cannot tell us where to relaunch.
   directory=$(pwd -P) || return 1
+  state_dir=${REX_RECOVER_STATE_DIR:-${XDG_STATE_HOME:-"$HOME/.local/state"}/rex-recover}
+  launch_dir=${REX_RECOVER_LAUNCH_DIR:-"$state_dir/launches"}
+  case "$launch_dir" in /*) ;; *) return 1 ;; esac
+  mkdir -p -- "$launch_dir" || return 1
+  context_file= temporary=
+  trap '[ -z "$context_file" ] || rm -f -- "$context_file"; [ -z "$temporary" ] || rm -f -- "$temporary"' EXIT
+  driver= home=
+  mode=${REX_RECOVER_SESSIONS:-}
+  case ",$mode," in
+    *,"$app",*) mode=1 ;;
+  esac
+  if [ "$mode" = 1 ]; then
+    context_file=$(mktemp "$launch_dir/.context.XXXXXX") || return 1
+    rex_cli=${REX_BIN:-${REX_BIN_DIR:+$REX_BIN_DIR/rex}}
+    if [ -z "$rex_cli" ]; then rex_cli=$(command -v rex 2>/dev/null || :); fi
+    [ -n "$rex_cli" ] || return 1
+    lookup_driver() (
+      set -- "$rex_cli" --autostart=false --timeout 3s
+      if [ -n "${REX_SERVER:-}" ]; then set -- "$@" --server "$REX_SERVER"; fi
+      "$@" do "$root/scripts/driver-context.lua" --all "app=$app" "output=$context_file" >/dev/null
+    )
+    lookup_driver || return 1
+    home_env= default_home=
+    IFS="$(printf '\t')" read -r driver home_env default_home <"$context_file" || :
+    if [ -n "$driver" ]; then
+      # Read only the environment variable declared by this driver.
+      # A trailing sentinel preserves control characters for validation.
+      home=$(LC_ALL=C awk -v name="$home_env" 'BEGIN { printf "%s.", ENVIRON[name] }') || return 1
+      home=${home%.}
+      home=${home:-"$HOME/$default_home"}
+      case "$home" in /*) ;; *) home="$directory/$home" ;; esac
+      cleaned=$(printf '%s' "$home" | LC_ALL=C tr -d '\000-\037\177') || return 1
+      [ "$cleaned" = "$home" ] || return 1
+      # Pin an existing store, not a symlink which could later change targets.
+      if [ -d "$home" ]; then
+        home=$(CDPATH= cd -- "$home" && pwd -P) || return 1
+      fi
+    fi
+  fi
   # Recovery types into a terminal. Do not store control characters that could
   # submit extra input or alter terminal behavior, even though NUL framing
   # itself could represent some of them.
-  for value in "$app" "$directory" "$executable" "$@"; do
+  for value in "$app" "$directory" "$executable" "$driver" "$home" "$@"; do
     cleaned=$(printf '%s' "$value" | LC_ALL=C tr -d '\000-\037\177') || return 1
     [ "$cleaned" = "$value" ] || return 1
   done
@@ -50,21 +90,22 @@ record_launch() (
   # Locale-dependent timestamp text would make the comparison unreliable.
   started_at=$(LC_ALL=C ps -p "$owner_pid" -o lstart= | sed 's/^ *//;s/ *$//')
   [ -n "$started_at" ] || return 1
-  state_dir=${REX_RECOVER_STATE_DIR:-${XDG_STATE_HOME:-"$HOME/.local/state"}/rex-recover}
-  launch_dir=${REX_RECOVER_LAUNCH_DIR:-"$state_dir/launches"}
-  case "$launch_dir" in /*) ;; *) return 1 ;; esac
-  mkdir -p -- "$launch_dir" || return 1
   # A concurrent watcher must see either the old record or a complete new one,
   # never half an argument array. Same-directory rename provides that boundary;
   # abandoned staging files must not accumulate when writing fails.
   temporary=$(mktemp "$launch_dir/.launch.XXXXXX") || return 1
-  trap 'rm -f -- "$temporary"' EXIT
   # Shell strings cannot contain NUL, making it an unambiguous delimiter even
   # for empty arguments. Text joined with spaces or quotes would lose the
   # original boundaries and could turn data into shell syntax on recovery.
-  printf '%s\000' rex-recover-launch-v1 "$REX_SESSION" "$REX_BLOCK" \
-    "$owner_pid" "$started_at" "$app" "$directory" "$executable" "$@" \
-    >"$temporary" || return 1
+  if [ -n "$driver" ]; then
+    printf '%s\000' rex-recover-launch-v2 "$REX_SESSION" "$REX_BLOCK" \
+      "$owner_pid" "$started_at" "$app" "$directory" "$driver" "$home" "$executable" "$@" \
+      >"$temporary" || return 1
+  else
+    printf '%s\000' rex-recover-launch-v1 "$REX_SESSION" "$REX_BLOCK" \
+      "$owner_pid" "$started_at" "$app" "$directory" "$executable" "$@" \
+      >"$temporary" || return 1
+  fi
   mv -f -- "$temporary" "$launch_dir/$REX_BLOCK"
 )
 

@@ -1,6 +1,10 @@
 local M = {}
+local driver_registry = require("drivers.registry")
 
 local shells = { sh = true, bash = true, zsh = true, fish = true, dash = true, ksh = true }
+-- Darwin's canonical PTY buffer is 1024 bytes; use that conservative bound
+-- on every host, including the command's final carriage return.
+local canonical_input_limit = 1024
 
 local function idle_shell(processes)
   if not processes.foreground or not shells[processes.foreground.name] then return false end
@@ -24,7 +28,7 @@ local function safe_text(value, allow_empty)
     and not value:find("%c")
 end
 
-local function valid_record(record)
+local function valid_record(record, omit_removed_drivers)
   if type(record) ~= "table" or not safe_text(record.session_id)
     or not record.session_id:match("^session:")
     or not safe_text(record.block_id) or not record.block_id:match("^block:")
@@ -43,10 +47,31 @@ local function valid_record(record)
     count = count + 1
   end
   if count ~= #record.argv then return nil, "argument array contains holes" end
-  return true
+  local orphan
+  if record.env ~= nil then
+    if type(record.env) ~= "table" then return nil, "invalid session storage environment" end
+    orphan = omit_removed_drivers and record.env.REX_RECOVER_SESSIONS == "1"
+      and not driver_registry.lookup(record.app)
+    for name, value in pairs(record.env) do
+      if name == "REX_RECOVER_SESSIONS" then
+        if value ~= "1" then return nil, "invalid session driver mode" end
+      elseif type(name) ~= "string" or not name:match("^[A-Z_][A-Z0-9_]*$")
+        or name == "PATH"
+        or (not orphan and not driver_registry.home_variable(name))
+        or (value ~= false and (not safe_text(value) or value:sub(1, 1) ~= "/")) then
+        return nil, "invalid session storage environment"
+      end
+    end
+  end
+  -- Driver proof is opaque checkpoint data, never part of the shell command.
+  if record.proof ~= nil and (not record.tracked or not record.env
+    or record.env.REX_RECOVER_SESSIONS ~= "1" or not safe_text(record.proof) or #record.proof > 8192) then
+    return nil, "invalid session recovery proof"
+  end
+  return true, nil, orphan
 end
 
-local function valid_state(state)
+local function valid_state(state, omit_removed_drivers)
   if type(state) ~= "table" or state.version ~= 1
     or not safe_text(state.host_id) or not safe_text(state.instance_id)
     or type(state.apps) ~= "table" or type(state.pending) ~= "table" then
@@ -54,9 +79,10 @@ local function valid_state(state)
   end
   for _, records in ipairs({ state.apps, state.pending }) do
     for key, record in pairs(records) do
-      local ok, err = valid_record(record)
+      local ok, err, orphan = valid_record(record, omit_removed_drivers)
       if not ok then return nil, err end
       if key ~= record.block_id then return nil, "checkpoint block ID mismatch" end
+      if orphan then records[key] = nil end
     end
   end
   return true
@@ -87,8 +113,9 @@ end
 function M.capture(session_id, block_id, processes, adapters, launch)
   local processes_to_check = candidates(processes)
   if launch and launch.session_id == session_id and launch.block_id == block_id then
-    for _, process in ipairs(processes_to_check) do
+    for index, process in ipairs(processes_to_check) do
       if process.pid == launch.pid then
+        table.remove(processes_to_check, index)
         table.insert(processes_to_check, 1, process)
         break
       end
@@ -98,7 +125,8 @@ function M.capture(session_id, block_id, processes, adapters, launch)
   end
   for _, process in ipairs(processes_to_check) do
     for _, adapter in ipairs(adapters or {}) do
-      local command = adapter.detect(process, launch)
+      local command, detection_err = adapter.detect(process, launch, processes)
+      if detection_err then return nil, detection_err end
       if command then
         local record = {
           session_id = session_id,
@@ -107,6 +135,8 @@ function M.capture(session_id, block_id, processes, adapters, launch)
           cwd = command.cwd,
           argv = command.argv,
           tracked = command.tracked,
+          env = command.env,
+          proof = command.proof,
         }
         local ok, err = valid_record(record)
         if not ok then return nil, err end
@@ -127,20 +157,44 @@ function M.read_launch(path)
   if not text or text:sub(-1) ~= "\0" then return nil, "incomplete launch record" end
   local fields = {}
   for field in text:gmatch("([^%z]*)%z") do fields[#fields + 1] = field end
-  if fields[1] ~= "rex-recover-launch-v1" or #fields < 8
+  local version = fields[1]
+  if (version ~= "rex-recover-launch-v1" and version ~= "rex-recover-launch-v2") or #fields < 8
     or not fields[4]:match("^[1-9]%d*$") or not safe_text(fields[5]) then
     return nil, "invalid launch record"
   end
+  local first_argument = 8
+  if version == "rex-recover-launch-v2" then
+    if #fields < 10 or not fields[2]:match("^session:[%w:-]+$")
+      or not fields[3]:match("^block:[%w:-]+$")
+      or not fields[6]:match("^[%w_][%w_.+%-]*$")
+      or not fields[8]:match("^[a-z0-9_%-]+$")
+      or not safe_text(fields[9]) or fields[9]:sub(1, 1) ~= "/" then
+      return nil, "invalid driver launch record"
+    end
+    first_argument = 10
+  end
   local argv = {}
-  for index = 8, #fields do argv[#argv + 1] = fields[index] end
+  for index = first_argument, #fields do argv[#argv + 1] = fields[index] end
   local record = {
     session_id = fields[2], block_id = fields[3], pid = tonumber(fields[4]),
     started_at = fields[5], app = fields[6], cwd = fields[7], argv = argv,
     tracked = true,
   }
+  if version == "rex-recover-launch-v2" then
+    record.driver, record.home = fields[8], fields[9]
+  end
   local ok
   ok, err = valid_record(record)
   if not ok then return nil, err end
+  if record.driver then
+    local driver = driver_registry.lookup(record.app)
+    if not driver then return nil end
+    if record.driver ~= driver.id then return nil, "invalid driver launch record" end
+    local started_hex = record.started_at:gsub(".", function(byte)
+      return string.format("%02x", string.byte(byte))
+    end)
+    record.selection_path = path .. "." .. tostring(record.pid) .. "." .. started_hex .. ".session"
+  end
   return record
 end
 
@@ -158,7 +212,7 @@ function M.load(path, json)
   state, err = json.decode(text)
   if not state then return nil, err end
   local ok
-  ok, err = valid_state(state)
+  ok, err = valid_state(state, true)
   if not ok then return nil, err end
   return state
 end
@@ -184,6 +238,17 @@ function M.save(path, state, json)
   return renamed, err
 end
 
+local function same(left, right)
+  if type(left) ~= "table" or type(right) ~= "table" then return left == right end
+  for key, value in pairs(left) do
+    if not same(value, right[key]) then return false end
+  end
+  for key in pairs(right) do
+    if left[key] == nil then return false end
+  end
+  return true
+end
+
 function M.new(api, options)
   local state, err = M.load(options.state_path, api.json)
   if not state then return nil, err end
@@ -194,7 +259,7 @@ function M.new(api, options)
       return nil, "each adapter needs a name and a detect function"
     end
     if enabled[adapter.name] then return nil, "adapter names must be unique" end
-    enabled[adapter.name] = true
+    enabled[adapter.name] = adapter
   end
   local monitor = {}
   local attached, attached_instance = {}, nil
@@ -287,13 +352,20 @@ function M.new(api, options)
       elseif observation.processes.foreground and not starting_shell(observation.processes) then
         pending[key] = nil
         if idle_shell(observation.processes) then
-          if record.tracked and (not safe_text(options.launcher)
-            or options.launcher:sub(1, 1) ~= "/"
-            or not safe_text(launch_dir) or launch_dir:sub(1, 1) ~= "/") then
-            return nil, "recorded command recovery requires safe absolute launcher and recording paths"
+          local recoverable, validation_err = true, nil
+          if enabled[record.app].validate then
+            recoverable, validation_err = enabled[record.app].validate(record)
           end
-          apps[key] = record
-          launches[#launches + 1] = record
+          if validation_err then return nil, validation_err end
+          if recoverable then
+            if record.tracked and (not safe_text(options.launcher)
+              or options.launcher:sub(1, 1) ~= "/"
+              or not safe_text(launch_dir) or launch_dir:sub(1, 1) ~= "/") then
+              return nil, "recorded command recovery requires safe absolute launcher and recording paths"
+            end
+            pending[key] = record
+            launches[#launches + 1] = record
+          end
         else
           api.log("warn", "Not restoring " .. record.app .. ": terminal " .. key .. " is busy")
         end
@@ -311,41 +383,86 @@ function M.new(api, options)
     if current_status.host_id ~= status.host_id or current_status.instance_id ~= status.instance_id then
       return nil, "server changed during the scan; checkpoint left untouched"
     end
-    local saved, save_err = M.save(options.state_path, next_state, api.json)
-    if not saved then return nil, save_err end
-    state = next_state
     for _, record in ipairs(launches) do
       local current
       current, call_err = api.call("com.superlogical.terminal.process", {
         session_id = record.session_id, block_id = record.block_id,
       })
       if not current then return nil, call_err end
-      if idle_shell(current) then
+      local ready = idle_shell(current)
+      local data, deferred
+      if ready then
         local function quote(value)
           return "'" .. value:gsub("'", "'\\''") .. "'"
         end
         local argv = {}
         for _, argument in ipairs(record.argv) do argv[#argv + 1] = quote(argument) end
         local prefix = ""
+        local environment = {}
+        for name in pairs(record.env or {}) do environment[#environment + 1] = name end
+        table.sort(environment)
+        local unsets = ""
+        for _, name in ipairs(environment) do
+          if record.env[name] == false then
+            unsets = unsets .. " -u " .. quote(name)
+          else
+            prefix = prefix .. name .. "=" .. quote(record.env[name]) .. " "
+          end
+        end
+        if unsets ~= "" then prefix = "/usr/bin/env" .. unsets .. " " .. prefix end
         if record.tracked then
           table.insert(argv, 1, quote(options.launcher))
-          prefix = "REX_RECOVER_LAUNCH_DIR=" .. quote(launch_dir) ..
+          prefix = prefix .. "REX_RECOVER_LAUNCH_DIR=" .. quote(launch_dir) ..
             " REX_SESSION=" .. quote(record.session_id) ..
             " REX_BLOCK=" .. quote(record.block_id) .. " "
         end
-        -- Persist consumption before typing: reconnecting must not queue a command twice.
-        local result
-        result, call_err = api.call("com.superlogical.terminal.write", {
-          session_id = record.session_id, block_id = record.block_id,
-          args = { data = "cd -- " .. quote(record.cwd) .. " && " .. prefix ..
-            table.concat(argv, " ") .. "\r" },
-        })
-        if not result then return nil, call_err end
-        api.log("info", "Restoring " .. record.app .. " in " .. record.block_id)
-      else
-        api.log("warn", "Not restoring " .. record.app .. ": terminal became busy")
+        data = "cd -- " .. quote(record.cwd) .. " && " .. prefix .. table.concat(argv, " ") .. "\r"
+        if #data >= canonical_input_limit then
+          -- A canonical-only shell must keep this pending. Noncanonical mode
+          -- avoids the known buffer loss, but does not prove prompt readiness.
+          local mode, mode_err = api.call("com.superlogical.terminal.input_mode", {
+            session_id = record.session_id, block_id = record.block_id,
+          })
+          if not mode then return nil, mode_err or "terminal input mode unavailable" end
+          if type(mode) ~= "table" or type(mode.canonical) ~= "boolean" then
+            return nil, "terminal input mode must report a canonical boolean"
+          end
+          deferred = mode.canonical
+        end
+      end
+      if not deferred then
+        local next_apps, next_pending = {}, {}
+        for key, value in pairs(next_state.apps) do next_apps[key] = value end
+        for key, value in pairs(next_state.pending) do next_pending[key] = value end
+        next_pending[record.block_id] = nil
+        if ready then next_apps[record.block_id] = record end
+        next_state = {
+          version = 1, host_id = status.host_id, instance_id = status.instance_id,
+          apps = next_apps, pending = next_pending,
+        }
+        -- Consume only this checked target; later targets remain retryable if a
+        -- process read, save, or write acknowledgement fails before their turn.
+        local saved, save_err = M.save(options.state_path, next_state, api.json)
+        if not saved then return nil, save_err end
+        state = next_state
+        if ready then
+          -- Persist consumption before typing: reconnecting must not queue a command twice.
+          local result
+          result, call_err = api.call("com.superlogical.terminal.write", {
+            session_id = record.session_id, block_id = record.block_id, args = { data = data },
+          })
+          if not result then return nil, call_err end
+          api.log("info", "Restoring " .. record.app .. " in " .. record.block_id)
+        else
+          api.log("warn", "Not restoring " .. record.app .. ": terminal became busy")
+        end
       end
     end
+    if not same(state, next_state) then
+      local saved, save_err = M.save(options.state_path, next_state, api.json)
+      if not saved then return nil, save_err end
+    end
+    state = next_state
     return true
   end
 
