@@ -136,7 +136,10 @@ if rex.args.phase and rex.args.phase ~= "unit" then
     end)
   elseif phase == "not-restored" then
     rex.sleep(0.5)
-    for index = 1, 2 do assert(process(index).name == "zsh") end
+    for index = 1, 2 do
+      local name = process(index).name
+      assert(name == "zsh" or name == "bash", "expected a restored login shell, got " .. name)
+    end
   elseif phase ~= "setup" then error("unknown OpenCode phase: " .. phase) end
   print("ok - OpenCode mock integration: " .. phase)
   return

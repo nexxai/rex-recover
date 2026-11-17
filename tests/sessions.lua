@@ -590,7 +590,9 @@ elseif phase == "new" then
 elseif phase == "restored" then
   assert(fixture.instance_id ~= call("server.status").instance_id, "server instance did not change")
   wait_for("opted-in pane remains an idle shell", function()
-    return process(1) and process(1).name == "zsh"
+    -- Rex restores a login shell, not the explicit zsh used at setup.
+    local current = process(1)
+    return current and (current.name == "zsh" or current.name == "bash")
   end)
   wait_for("generic Codex fixture restores exact original argv", function()
     local current = process(2)
