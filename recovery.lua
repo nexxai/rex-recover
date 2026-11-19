@@ -300,6 +300,11 @@ function M.new(api, options)
     sessions, call_err = api.call("session.list")
     if not sessions then return nil, call_err end
     local apps, observations = {}, {}
+    -- A pane whose app can't say what it's running (a lookup failed, or its
+    -- observer isn't ready) keeps what was last saved for it, as a failed scan
+    -- keeps the whole checkpoint. The other panes are still saved and restored,
+    -- and the scan still reports the error.
+    local unknown, capture_err = {}, nil
     for _, session in ipairs(sessions.sessions or {}) do
       if not attached[session.session_id] then
         local result
@@ -327,8 +332,13 @@ function M.new(api, options)
           local record
           record, call_err = M.capture(session.session_id, block.block_id,
             processes, options.adapters, launch)
-          if call_err then return nil, call_err end
-          if record then
+          if call_err then
+            unknown[block.block_id] = true
+            capture_err = capture_err or call_err
+            if state.instance_id == status.instance_id then
+              apps[block.block_id] = state.apps[block.block_id]
+            end
+          elseif record then
             apps[block.block_id] = record
           elseif not processes.foreground and not processes.last_exit
             and state.instance_id == status.instance_id then
@@ -345,7 +355,9 @@ function M.new(api, options)
     local launches = {}
     for key, record in pairs(pending) do
       local observation = observations[key]
-      if not enabled[record.app] or not observation
+      if unknown[key] then
+        -- Left as saved: it may be the relaunched app that isn't ready yet.
+      elseif not enabled[record.app] or not observation
         or observation.session_id ~= record.session_id or apps[key]
         or observation.processes.last_exit then
         pending[key] = nil
@@ -463,6 +475,7 @@ function M.new(api, options)
       if not saved then return nil, save_err end
     end
     state = next_state
+    if capture_err then return nil, capture_err end
     return true
   end
 

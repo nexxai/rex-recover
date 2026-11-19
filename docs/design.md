@@ -14,6 +14,9 @@ The watcher runs outside the Rex server so it can tell when a new server
 instance brings the same panes back. It checks the live process against the
 recorded PID and start time, because PIDs can be reused. Bounded scans leave
 unchanged checkpoints alone, and a failed scan keeps the previous checkpoint.
+When only one pane's app can't report its state, such as an OpenCode client
+that lost its connection, that pane keeps its previous entry and the others
+are still saved.
 Restoration rechecks the destination shell and records an attempt before
 queuing input: a missed restart is safer than running the same command twice.
 

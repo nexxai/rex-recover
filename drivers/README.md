@@ -27,7 +27,7 @@ It does not run the resume command itself. There are three possible returns:
 | --- | --- |
 | `{ argv = { "/usr/local/bin/my-agent", "resume", "session-123" } }` | Saves this command to reopen the confirmed conversation. |
 | `nil` | Saves no command for this launch. A successful scan clears any previous capture for the pane. |
-| `nil, "session lookup timed out"` | Aborts the scan and keeps the previous checkpoint. Use this when the lookup failed, rather than when it found no match. |
+| `nil, "session lookup timed out"` | Keeps this pane's previous checkpoint and reports the error. Other panes are still saved and restored. Use this when the lookup failed, rather than when it found no match. |
 
 In this example, `find_saved_session` stands for the app-specific lookup you
 implement. It returns a verified session ID, `nil` for no match, or `nil, error`
