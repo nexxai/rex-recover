@@ -970,6 +970,91 @@ test("failed session discovery cannot erase the last durable recovery command", 
   equal(read(f.options.state_path), saved)
 end)
 
+local function two_panes(f)
+  local worker = command()
+  local viewer = {
+    session_id = "session:work", block_id = "block:other", app = "sample-viewer",
+    cwd = "/workspace/viewer", argv = { "/usr/local/bin/sample-viewer", "--resume", "first-session" },
+    tracked = true,
+  }
+  launch_file(f.options.launch_dir .. "/block:other", viewer, 7002)
+  local execute = f.api.exec
+  f.api.exec = function(argv)
+    if argv[3] == "7002" then return { ok = true, stdout = birth .. "\n" } end
+    return execute(argv)
+  end
+  return worker, viewer
+end
+
+-- Fails only for the given PIDs, so the other pane's discovery still works.
+local function failing_worker(pids)
+  return {
+    name = "sample-worker",
+    detect = function(process, launch)
+      if pids[process.pid] then return nil, "session discovery unavailable" end
+      if launch and launch.app == "sample-worker" and launch.pid == process.pid then
+        return { cwd = launch.cwd, argv = launch.argv, tracked = true }
+      end
+    end,
+  }
+end
+
+test("one pane's failed discovery keeps its saved command while other panes are still saved", function()
+  local f = fixture()
+  local worker, viewer = two_panes(f)
+  assert(monitor(f):tick())
+  equal(checkpoint(f).apps, { ["block:worker"] = worker, ["block:other"] = viewer })
+  viewer.argv = { "/usr/local/bin/sample-viewer", "--resume", "second-session" }
+  launch_file(f.options.launch_dir .. "/block:other", viewer, 7002)
+  f.options.adapters = { failing_worker({ [7001] = true }), recovery.recorded("sample-viewer") }
+  local ok, err = monitor(f):tick()
+  assert(not ok and err == "session discovery unavailable", "the failed discovery was not reported")
+  equal(checkpoint(f).apps, { ["block:worker"] = worker, ["block:other"] = viewer })
+  equal(f.writes, {})
+end)
+
+test("after a restart, a lone pane whose discovery fails keeps its command pending until it can be checked", function()
+  local f = fixture()
+  local worker = command()
+  assert(monitor(f):tick())
+  restarted(f)
+  f.processes["block:worker"] = { foreground = { pid = 7005, name = "not-ready-yet" } }
+  f.options.adapters = { failing_worker({ [7005] = true }) }
+  local ok, err = monitor(f):tick()
+  assert(not ok and err == "session discovery unavailable", "the failed discovery was not reported")
+  -- Saved under the new server run, like a successful scan would, but never typed.
+  equal(checkpoint(f).instance_id, "run-b")
+  equal(checkpoint(f).pending, { ["block:worker"] = worker })
+  equal(checkpoint(f).apps, {})
+  equal(f.writes, {})
+  f.processes["block:worker"] = { foreground = { name = "zsh" } }
+  f.options.adapters = { recovery.recorded("sample-worker") }
+  assert(monitor(f):tick())
+  equal(#f.writes, 1)
+  equal(f.writes[1].block_id, "block:worker")
+end)
+
+test("after a restart, a pane whose discovery fails stays pending while another pane recovers", function()
+  local f = fixture()
+  local worker, viewer = two_panes(f)
+  assert(monitor(f):tick())
+  restarted(f)
+  f.processes["block:worker"] = { foreground = { pid = 7005, name = "not-ready-yet" } }
+  f.processes["block:other"] = { foreground = { name = "zsh" } }
+  f.options.adapters = { failing_worker({ [7005] = true }), recovery.recorded("sample-viewer") }
+  local ok, err = monitor(f):tick()
+  assert(not ok and err == "session discovery unavailable", "the failed discovery was not reported")
+  equal(#f.writes, 1)
+  equal(f.writes[1].block_id, "block:other")
+  equal(checkpoint(f).pending, { ["block:worker"] = worker })
+  equal(checkpoint(f).apps, { ["block:other"] = viewer })
+  f.processes["block:worker"] = { foreground = { name = "zsh" } }
+  f.options.adapters = { recovery.recorded("sample-worker"), recovery.recorded("sample-viewer") }
+  assert(monitor(f):tick())
+  equal(#f.writes, 2)
+  equal(f.writes[2].block_id, "block:worker")
+end)
+
 test("removed drivers are omitted from apps and pending while generic commands still recover", function()
   local f = fixture()
   local registry = require("drivers.registry")

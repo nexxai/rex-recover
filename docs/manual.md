@@ -391,7 +391,9 @@ directory, use `/absolute/project`, `./project`, or `-- project`.
 Recovery follows saved selections. Home, plugin pages, unsaved sessions, and
 child-agent views clear the selection. If the connection changes, capture
 waits for a fresh plugin context rather than assuming the new connection uses
-the same database. Relaunch the terminal UI if capture stays paused.
+the same database. Even a brief reconnect, such as after the computer sleeps,
+pauses it. A paused pane keeps the conversation it last saved, and other panes
+are still saved. Relaunch the terminal UI to resume capture in that pane.
 
 Explicit remote servers, Mini, `run`, in-memory databases, and alternate inline
 or environment-based configuration selectors are unsupported. Other versions
